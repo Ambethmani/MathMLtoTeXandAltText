@@ -15,11 +15,57 @@ const express = require("express");
 
 const app    = express();
 const PORT   = process.env.PORT || 3000;
+
+// Enable CORS — allows browser clients and external services to call the API
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin",  "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") return res.sendStatus(200);
+    next();
+});
 const UPLOAD = path.join(__dirname, "uploads");
 const OUTPUT = path.join(__dirname, "outputs");
 
 // Create folders if not exist
 [UPLOAD, OUTPUT].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+
+/* ================================================================
+   CLOUD STORAGE CLEANUP
+   On cloud servers disk space is limited.
+   Auto-delete output files older than MAX_FILE_AGE_MS (default 1hr)
+   This keeps the outputs folder from filling up.
+================================================================ */
+const MAX_FILE_AGE_MS = parseInt(process.env.MAX_FILE_AGE_MS || "3600000"); // 1 hour
+
+function cleanOldOutputFiles() {
+    try {
+        const now = Date.now();
+        const files = fs.readdirSync(OUTPUT);
+        let deleted = 0;
+        files.forEach(f => {
+            const fp = path.join(OUTPUT, f);
+            try {
+                const stat = fs.statSync(fp);
+                if (now - stat.mtimeMs > MAX_FILE_AGE_MS) {
+                    fs.unlinkSync(fp);
+                    deleted++;
+                }
+            } catch (_) {}
+        });
+        if (deleted > 0) console.log(`[CLEANUP] Deleted ${deleted} old output file(s)`);
+    } catch (_) {}
+}
+
+// Run cleanup every 30 minutes
+setInterval(cleanOldOutputFiles, 30 * 60 * 1000);
+
+// Is running on cloud (not localhost)
+const IS_CLOUD = !!(process.env.RAILWAY_ENVIRONMENT ||
+                    process.env.RENDER ||
+                    process.env.DYNO ||        // Heroku
+                    process.env.K_SERVICE ||   // Cloud Run
+                    process.env.WEBSITE_INSTANCE_ID); // Azure
 
 // Multer — accept only XML files
 const storage = multer.diskStorage({
@@ -708,7 +754,7 @@ function buildLog(equations, filename, timestamp) {
 
     // ── HEADER ────────────────────────────────────────────────────
     lines.push(SEP);
-    lines.push("  MathML Equation Processor — Processing Log");
+    lines.push("  MathMLtoTeXandAltText — Processing Log");
     lines.push(SEP);
     lines.push(`  Input File : ${filename}`);
     lines.push(`  Processed  : ${now}`);
@@ -1173,7 +1219,7 @@ async function processXML(rawXML, filename) {
 
     const txtLines = [
         SEP,
-        "  MathML Equation Processor — Output",
+        "  MathMLtoTeXandAltText — Output",
         `  Source  : ${filename}`,
         `  Found   : ${equations.length} equation(s)`,
         `  Date    : ${new Date().toLocaleString()}`,
@@ -1237,7 +1283,7 @@ async function processXML(rawXML, filename) {
 // ── GET / — API info and usage ───────────────────────────────────
 app.get("/", (req, res) => {
     res.json({
-        name:    "MathML Equation Processor API",
+        name:    "MathMLtoTeXandAltText API",
         version: "1.0.0",
         endpoints: {
             "POST /process": {
@@ -1267,7 +1313,7 @@ app.get("/ui", (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MathML Equation Processor</title>
+<title>MathMLtoTeXandAltText</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Segoe UI, Arial, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -1311,7 +1357,7 @@ app.get("/ui", (req, res) => {
 </head>
 <body>
 <div class="card">
-  <h1>MathML Equation Processor</h1>
+  <h1>MathMLtoTeXandAltText</h1>
   <p class="sub">Upload an XML file to extract TeX, AltText and update img tags</p>
 
   <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
@@ -1406,11 +1452,30 @@ app.get("/ui", (req, res) => {
         stat(alt.success || 0, 'AltText Success', 'ok') +
         stat((alt.errors || 0) + (alt.warnings || 0), 'AltText Issues', (alt.errors || 0) > 0 ? 'fail' : 'warn');
 
-      const dl = data.downloads || {};
+      // Use Blob URLs for instant download — no second HTTP request needed
+      // This fixes slow downloads on Render/cloud free tier cold starts
+      const ct = data.content || {};
       let btns = '';
-      if (dl.txt) btns += '<a class="dl-btn" href="' + dl.txt + '" download>\u2B07 Download TXT (TeX + AltText output)</a>';
-      if (dl.xml) btns += '<a class="dl-btn xml" href="' + dl.xml + '" download>\u2B07 Download Modified XML (img tags updated)</a>';
-      if (dl.log) btns += '<a class="dl-btn log" href="' + dl.log + '" download>\u2B07 Download Processing Log</a>';
+
+      function makeBlobBtn(text, filename, cssClass, label) {
+        if (!text) return '';
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        return '<a class="dl-btn ' + cssClass + '" href="' + url + '" download="' + filename + '">' + label + '</a>';
+      }
+
+      if (ct.txt) btns += makeBlobBtn(ct.txt, ct.txtName || 'equations.txt',    '',    '\u2B07 Download TXT (TeX + AltText output)');
+      if (ct.xml) btns += makeBlobBtn(ct.xml, ct.xmlName || 'modified.xml',    'xml', '\u2B07 Download Modified XML (img tags updated)');
+      if (ct.log) btns += makeBlobBtn(ct.log, ct.logName || 'log.txt',         'log', '\u2B07 Download Processing Log');
+
+      // Fallback to URL links if content not embedded
+      if (!btns) {
+        const dl = data.downloads || {};
+        if (dl.txt) btns += '<a class="dl-btn" href="' + dl.txt + '" download>\u2B07 Download TXT</a>';
+        if (dl.xml) btns += '<a class="dl-btn xml" href="' + dl.xml + '" download>\u2B07 Download Modified XML</a>';
+        if (dl.log) btns += '<a class="dl-btn log" href="' + dl.log + '" download>\u2B07 Download Processing Log</a>';
+      }
+
       document.getElementById('dlButtons').innerHTML = btns;
 
       document.getElementById('result').style.display = 'block';
@@ -1517,6 +1582,9 @@ app.post("/process", upload.single("file"), async (req, res) => {
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
+
+    // Embed file contents directly in response so browser can download
+    // without making a second HTTP request (fixes Render cold start delay)
     const response = {
         success:         true,
         filename:        origName,
@@ -1528,6 +1596,15 @@ app.post("/process", upload.single("file"), async (req, res) => {
         downloads: {
             txt: `${baseURL}/download/${txtFilename}`,
             log: `${baseURL}/download/${logFilename}`
+        },
+        // Embed content directly for instant browser download (no second request)
+        content: {
+            txt:      result.txtContent,
+            log:      result.logContent,
+            xml:      result.xmlContent || null,
+            txtName:  txtFilename,
+            logName:  logFilename,
+            xmlName:  xmlFilename || null
         },
         equations: result.equations.map((eq, i) => ({
             index:   i + 1,
@@ -1624,10 +1701,11 @@ function startServer(port, retriesLeft) {
     server.listen(port, function() {
         const actualPort = server.address().port;
         console.log("\n" + "=".repeat(60));
-        console.log("  MathML Equation Processor API");
+        console.log("  MathMLtoTeXandAltText API");
         console.log("=".repeat(60));
         console.log("  Running  : http://localhost:" + actualPort);
         console.log("  Endpoint : POST http://localhost:" + actualPort + "/process");
+        console.log("  Browser  : http://localhost:" + actualPort + "/ui");
         console.log("  Upload   : multipart field name = \'file\'");
         console.log("  Outputs  : " + OUTPUT);
         console.log("=".repeat(60));
