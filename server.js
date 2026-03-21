@@ -1317,126 +1317,320 @@ app.get("/ui", (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MathMLtoTeXandAltText — by Ambeth</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Segoe UI, Arial, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .card { background: white; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); padding: 40px; width: 600px; max-width: 95vw; }
-  h1 { font-size: 22px; color: #1a1a2e; margin-bottom: 6px; }
-  .sub { color: #666; font-size: 14px; margin-bottom: 30px; }
-  .drop-zone { border: 2px dashed #4a90d9; border-radius: 8px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.2s; background: #f8fbff; margin-bottom: 20px; }
-  .drop-zone:hover, .drop-zone.dragover { border-color: #1a6bbf; background: #e8f3ff; }
-  .drop-zone .icon { font-size: 48px; margin-bottom: 10px; }
-  .drop-zone p { color: #555; font-size: 15px; }
-  .drop-zone span { color: #4a90d9; font-weight: 600; }
-  #fileInput { display: none; }
-  #fileName { margin: 10px 0 20px; color: #333; font-size: 14px; min-height: 20px; text-align: center; }
-  .btn { width: 100%; padding: 14px; background: #4a90d9; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-  .btn:hover { background: #1a6bbf; }
-  .btn:disabled { background: #aaa; cursor: not-allowed; }
-  .progress { display: none; margin-top: 20px; text-align: center; color: #555; }
-  .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #ddd; border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .result { display: none; margin-top: 24px; }
-  .result-box { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-  .result-box h3 { font-size: 15px; color: #333; margin-bottom: 12px; }
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-  .stat { background: white; border-radius: 6px; padding: 12px; border: 1px solid #e0e0e0; text-align: center; }
-  .stat .num { font-size: 28px; font-weight: 700; color: #4a90d9; }
-  .stat .lbl { font-size: 12px; color: #888; margin-top: 2px; }
-  .stat.ok .num { color: #28a745; }
-  .stat.warn .num { color: #f0ad4e; }
-  .stat.fail .num { color: #dc3545; }
-  .dl-btn { display: block; width: 100%; padding: 11px 16px; margin-bottom: 8px; background: white; border: 1.5px solid #4a90d9; color: #4a90d9; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; text-align: center; transition: all 0.2s; }
-  .dl-btn:hover { background: #4a90d9; color: white; }
-  .dl-btn.xml { border-color: #28a745; color: #28a745; }
-  .dl-btn.xml:hover { background: #28a745; color: white; }
-  .dl-btn.log { border-color: #f0ad4e; color: #f0ad4e; }
-  .dl-btn.log:hover { background: #f0ad4e; color: white; }
-  .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
-  .status-ok { background: #d4edda; color: #155724; }
-  .status-issues { background: #fff3cd; color: #856404; }
-  .error-box { background: #fde8e8; border: 1px solid #f5c6cb; border-radius: 8px; padding: 16px; color: #721c24; margin-top: 16px; display: none; }
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--border2:#3a3a3a;--text:#e8e8e8;--muted:#888;--blue:#4f8ef7;--blue2:#3a7de8;--green:#22c55e;--green2:#16a34a;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Nav ── */
+.nav{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:52px;border-bottom:1px solid var(--border);background:var(--surface)}
+.nav-logo{display:flex;align-items:center;gap:10px}
+.nav-logo-icon{width:28px;height:28px;background:var(--blue);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:white}
+.nav-title{font-size:14px;font-weight:600;color:var(--text)}
+.nav-right{display:flex;align-items:center;gap:16px}
+.nav-badge{font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--border2);color:var(--muted)}
+.nav-link{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.nav-link:hover{color:var(--text);text-decoration:none}
+.nav-author{font-size:12px;color:var(--muted)}
+
+/* ── Main layout ── */
+.main{flex:1;display:flex;max-width:1100px;width:100%;margin:0 auto;padding:32px 24px;gap:28px}
+.left-col{flex:1;min-width:0}
+.right-col{width:320px;flex-shrink:0}
+
+/* ── Upload panel ── */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.panel-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.panel-title{font-size:13px;font-weight:600;color:var(--text)}
+.panel-body{padding:20px}
+
+/* ── Drop zone ── */
+.drop-zone{border:1.5px dashed var(--border2);border-radius:8px;padding:36px 20px;text-align:center;cursor:pointer;transition:all 0.15s;background:var(--surface2)}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--blue);background:#1a2235}
+.drop-icon{width:40px;height:40px;margin:0 auto 12px;background:var(--surface);border:1px solid var(--border2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.drop-title{font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px}
+.drop-sub{font-size:12px;color:var(--muted)}
+.drop-sub span{color:var(--blue)}
+#fileInput{display:none}
+
+/* ── File selected ── */
+.file-info{display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-top:12px;display:flex;align-items:center;gap:10px}
+.file-icon{width:32px;height:32px;background:#1a2235;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.file-name{font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-size{font-size:11px;color:var(--muted);margin-top:1px}
+.file-remove{margin-left:auto;cursor:pointer;color:var(--muted);font-size:16px;flex-shrink:0;line-height:1}
+.file-remove:hover{color:var(--red)}
+
+/* ── Process button ── */
+.process-btn{width:100%;margin-top:14px;padding:10px;background:var(--blue);color:white;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.15s;display:flex;align-items:center;justify-content:center;gap:8px}
+.process-btn:hover{background:var(--blue2)}
+.process-btn:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;border:1px solid var(--border)}
+.process-btn .arrow{font-size:16px}
+
+/* ── Progress ── */
+.progress-area{display:none;margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:14px}
+.progress-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.progress-label{font-size:12px;color:var(--muted)}
+.progress-pct{font-size:12px;font-weight:600;color:var(--blue)}
+.progress-bar-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.progress-bar-fill{height:100%;width:0;background:var(--blue);border-radius:2px;transition:width 0.3s}
+.progress-steps{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.step{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+.step.active{color:var(--text)}
+.step.done{color:var(--green)}
+.step-dot{width:6px;height:6px;border-radius:50%;background:var(--border2);flex-shrink:0}
+.step.active .step-dot{background:var(--blue)}
+.step.done .step-dot{background:var(--green)}
+
+/* ── Error ── */
+.error-box{display:none;margin-top:12px;background:#2a1515;border:1px solid #5a2020;border-radius:7px;padding:12px 14px;font-size:12px;color:#f87171}
+
+/* ── Results ── */
+.results{display:none;margin-top:20px}
+.result-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.result-title{font-size:13px;font-weight:600;color:var(--text)}
+.status-pill{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600}
+.status-ok{background:#0f2a1a;color:#4ade80;border:1px solid #1a4a2a}
+.status-warn{background:#2a2000;color:#fbbf24;border:1px solid #4a3800}
+
+/* ── Stats grid ── */
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px;text-align:center}
+.stat-num{font-size:22px;font-weight:600;color:var(--text);line-height:1}
+.stat-lbl{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.3}
+.stat-card.ok .stat-num{color:var(--green)}
+.stat-card.warn .stat-num{color:var(--amber)}
+.stat-card.fail .stat-num{color:var(--red)}
+
+/* ── Download cards ── */
+.dl-section-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px}
+.dl-card{display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px 14px;margin-bottom:8px;text-decoration:none;transition:border-color 0.15s,background 0.15s;cursor:pointer}
+.dl-card:hover{border-color:var(--border2);background:#1e1e1e;text-decoration:none}
+.dl-card-icon{width:34px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.dl-card-icon.txt{background:#1a2235;color:var(--blue)}
+.dl-card-icon.xml{background:#0f2a1a;color:var(--green)}
+.dl-card-icon.log{background:#2a2000;color:var(--amber)}
+.dl-card-body{flex:1;min-width:0}
+.dl-card-name{font-size:13px;font-weight:500;color:var(--text)}
+.dl-card-desc{font-size:11px;color:var(--muted);margin-top:1px}
+.dl-card-arrow{color:var(--muted);font-size:14px;flex-shrink:0}
+.dl-card:hover .dl-card-arrow{color:var(--text)}
+
+/* ── Right sidebar ── */
+.info-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px}
+.info-card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px}
+.info-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
+.info-row:last-child{margin-bottom:0}
+.info-dot{width:6px;height:6px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:5px}
+.info-text{font-size:12px;color:var(--muted);line-height:1.5}
+.info-text strong{color:var(--text);font-weight:500}
+.engine-tag{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted);margin-bottom:6px;width:100%}
+.engine-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.built-by{text-align:center;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:11px;color:var(--muted)}
+.built-by strong{color:var(--text);font-weight:500}
 </style>
 </head>
 <body>
-<div class="card">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-    <h1>MathMLtoTeXandAltText</h1>
-    <span style="background:#1a1a2e;color:white;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600;">v1.0</span>
-  </div>
-  <p class="sub">Upload an XML file to extract TeX, AltText and update img tags</p>
-  <div style="background:#f0f7ff;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;margin-bottom:20px;font-size:12px;color:#444;">
-    <strong>Developed by:</strong> Ambeth &nbsp;|&nbsp;
-    <strong>Engine:</strong> WIRIS + mathml-to-latex &nbsp;|&nbsp;
-    <strong>GitHub:</strong> <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:#4a90d9;">Ambeth/MathMLtoTeXandAltText</a>
-  </div>
 
-  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-    <div class="icon">📄</div>
-    <p>Drag & drop your XML file here</p>
-    <p>or <span>click to browse</span></p>
+<nav class="nav">
+  <div class="nav-logo">
+    <div class="nav-logo-icon">M</div>
+    <span class="nav-title">MathMLtoTeXandAltText</span>
+    <span class="nav-badge">v1.0</span>
   </div>
-  <input type="file" id="fileInput" accept=".xml">
-  <div id="fileName">No file selected</div>
-
-  <button class="btn" id="processBtn" onclick="processFile()" disabled>Process File</button>
-  <div style="text-align:center;margin-top:20px;font-size:11px;color:#aaa;">
-    Built by <strong style="color:#666;">Ambeth</strong> &nbsp;·&nbsp;
-    Powered by WIRIS + mathml-to-latex &nbsp;·&nbsp;
-    <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:#4a90d9;">GitHub</a>
+  <div class="nav-right">
+    <span class="nav-author">by <strong style="color:var(--text)">Ambeth</strong></span>
+    <a class="nav-link" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+      GitHub
+    </a>
   </div>
+</nav>
 
-  <div class="progress" id="progress">
-    <span class="spinner"></span> Processing equations...
-  </div>
+<div class="main">
+  <div class="left-col">
 
-  <div class="error-box" id="errorBox"></div>
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Upload XML file</span>
+        <span style="font-size:11px;color:var(--muted)">.xml files only</span>
+      </div>
+      <div class="panel-body">
 
-  <div class="result" id="result">
-    <div class="result-box">
-      <h3>Processing Complete</h3>
-      <div id="statusBadge"></div>
-      <div class="stat-grid" id="statGrid"></div>
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+          <div class="drop-icon">&#128196;</div>
+          <div class="drop-title">Drop your XML file here</div>
+          <div class="drop-sub">or <span>click to browse</span></div>
+        </div>
+        <input type="file" id="fileInput" accept=".xml">
+
+        <div class="file-info" id="fileInfo" style="display:none">
+          <div class="file-icon">&#128196;</div>
+          <div style="flex:1;min-width:0">
+            <div class="file-name" id="fileName">—</div>
+            <div class="file-size" id="fileSize">—</div>
+          </div>
+          <div class="file-remove" onclick="removeFile()" title="Remove">&#215;</div>
+        </div>
+
+        <button class="process-btn" id="processBtn" onclick="processFile()" disabled>
+          <span>Process file</span>
+          <span class="arrow">&#8594;</span>
+        </button>
+
+        <div class="progress-area" id="progressArea">
+          <div class="progress-top">
+            <span class="progress-label" id="progressLabel">Uploading...</span>
+            <span class="progress-pct" id="progressPct">0%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progressBar"></div>
+          </div>
+          <div class="progress-steps">
+            <div class="step" id="step1"><div class="step-dot"></div>Uploading XML file</div>
+            <div class="step" id="step2"><div class="step-dot"></div>Parsing MathML equations</div>
+            <div class="step" id="step3"><div class="step-dot"></div>Converting to TeX via WIRIS</div>
+            <div class="step" id="step4"><div class="step-dot"></div>Generating Alt Text</div>
+            <div class="step" id="step5"><div class="step-dot"></div>Writing output files</div>
+          </div>
+        </div>
+
+        <div class="error-box" id="errorBox"></div>
+
+      </div>
     </div>
-    <div class="result-box">
-      <h3>Download Output Files</h3>
-      <div id="dlButtons"></div>
+
+    <div class="results" id="results">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Results</span>
+          <div id="statusPill"></div>
+        </div>
+        <div class="panel-body">
+          <div class="stats-grid" id="statsGrid"></div>
+          <div class="dl-section-title">Output files</div>
+          <div id="dlCards"></div>
+          <button onclick="resetForm()" style="width:100%;margin-top:8px;padding:9px;background:transparent;border:1px solid var(--border2);border-radius:7px;color:var(--muted);font-size:12px;cursor:pointer">
+            &#8592; Process another file
+          </button>
+        </div>
+      </div>
     </div>
+
+  </div>
+
+  <div class="right-col">
+
+    <div class="info-card">
+      <div class="info-card-title">Conversion engines</div>
+      <div class="engine-tag"><div class="engine-dot"></div>WIRIS / MathType API — primary</div>
+      <div class="engine-tag" style="opacity:0.6"><div class="engine-dot" style="background:var(--amber)"></div>mathml-to-latex — fallback</div>
+    </div>
+
+    <div class="info-card">
+      <div class="info-card-title">Supported formats</div>
+      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS / NLM</strong> — inline-formula, disp-formula</div></div>
+      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>Springer</strong> — InlineEquation, Equation</div></div>
+      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>HTML span</strong> — span.inline / span.display</div></div>
+      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>Bare</strong> — any math tag (fallback)</div></div>
+    </div>
+
+    <div class="info-card">
+      <div class="info-card-title">Output files</div>
+      <div class="info-row"><div class="info-dot" style="background:var(--blue)"></div><div class="info-text"><strong>TXT</strong> — TeX, AltText, MathML per equation</div></div>
+      <div class="info-row"><div class="info-dot" style="background:var(--green)"></div><div class="info-text"><strong>XML</strong> — modified XML with tex="" alttext="" added to img tags</div></div>
+      <div class="info-row"><div class="info-dot" style="background:var(--amber)"></div><div class="info-text"><strong>LOG</strong> — processing log with complexity analysis</div></div>
+    </div>
+
+    <div class="built-by">
+      Built by <strong>Ambeth</strong> &#183;
+      <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:var(--blue)">GitHub</a>
+    </div>
+
   </div>
 </div>
 
 <script>
-  const dropZone = document.getElementById('dropZone');
+  const dropZone  = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
   let selectedFile = null;
 
   dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
   dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
+    e.preventDefault(); dropZone.classList.remove('dragover');
     const f = e.dataTransfer.files[0];
     if (f && f.name.endsWith('.xml')) setFile(f);
-    else showError('Please drop an XML file.');
+    else showError('Please drop an .xml file.');
   });
-
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) setFile(fileInput.files[0]);
-  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
 
   function setFile(f) {
     selectedFile = f;
-    document.getElementById('fileName').textContent = '\u2713 ' + f.name + '  (' + (f.size / 1024).toFixed(1) + ' KB)';
+    document.getElementById('fileName').textContent = f.name;
+    document.getElementById('fileSize').textContent = (f.size / 1024).toFixed(1) + ' KB';
+    document.getElementById('fileInfo').style.display = 'flex';
+    document.getElementById('dropZone').style.display = 'none';
     document.getElementById('processBtn').disabled = false;
-    document.getElementById('result').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
+    document.getElementById('results').style.display = 'none';
+  }
+
+  function removeFile() {
+    selectedFile = null;
+    fileInput.value = '';
+    document.getElementById('fileInfo').style.display = 'none';
+    document.getElementById('dropZone').style.display = 'block';
+    document.getElementById('processBtn').disabled = true;
+  }
+
+  function resetForm() {
+    removeFile();
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('progressArea').style.display = 'none';
+  }
+
+  let progTimer = null;
+  function startProgress() {
+    const steps   = ['step1','step2','step3','step4','step5'];
+    const labels  = ['Uploading...','Parsing MathML...','Converting to TeX...','Generating AltText...','Writing outputs...'];
+    const targets = [15, 35, 65, 85, 95];
+    let cur = 0, pct = 0;
+
+    document.getElementById('progressArea').style.display = 'block';
+    steps.forEach(s => { document.getElementById(s).className = 'step'; });
+
+    progTimer = setInterval(() => {
+      if (cur < steps.length) {
+        document.getElementById(steps[cur]).className = 'step active';
+        document.getElementById('progressLabel').textContent = labels[cur];
+        const target = targets[cur];
+        if (pct < target) {
+          pct = Math.min(pct + 2, target);
+          document.getElementById('progressBar').style.width = pct + '%';
+          document.getElementById('progressPct').textContent = pct + '%';
+        } else { cur++; }
+      }
+    }, 120);
+  }
+
+  function stopProgress(success) {
+    if (progTimer) clearInterval(progTimer);
+    const steps = ['step1','step2','step3','step4','step5'];
+    steps.forEach(s => { document.getElementById(s).className = 'step done'; });
+    document.getElementById('progressBar').style.width = '100%';
+    document.getElementById('progressPct').textContent = '100%';
+    document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
+    setTimeout(() => { document.getElementById('progressArea').style.display = 'none'; }, 800);
   }
 
   async function processFile() {
     if (!selectedFile) return;
     document.getElementById('processBtn').disabled = true;
-    document.getElementById('progress').style.display = 'block';
-    document.getElementById('result').style.display = 'none';
+    document.getElementById('results').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
+    startProgress();
 
     const formData = new FormData();
     formData.append('file', selectedFile);
@@ -1444,72 +1638,69 @@ app.get("/ui", (req, res) => {
     try {
       const resp = await fetch('/process', { method: 'POST', body: formData });
       const data = await resp.json();
-
-      document.getElementById('progress').style.display = 'none';
+      stopProgress(data.success);
 
       if (!data.success) { showError(data.error || 'Processing failed'); return; }
 
       const stats = data.conversionStats || {};
-      const tex   = stats.tex   || {};
+      const tex   = stats.tex     || {};
       const alt   = stats.altText || {};
-      const allOK = (tex.errors || 0) === 0 && (alt.errors || 0) === 0 && (tex.warnings || 0) === 0;
+      const allOK = (tex.errors || 0) === 0 && (alt.errors || 0) === 0;
 
-      document.getElementById('statusBadge').innerHTML =
-        '<span class="status-badge ' + (allOK ? 'status-ok' : 'status-issues') + '">' +
-        (allOK ? '\u2713 All equations converted successfully' : '\u26a0 Completed with issues — check log') +
-        '</span>';
+      document.getElementById('statusPill').innerHTML =
+        '<span class="status-pill ' + (allOK ? 'status-ok' : 'status-warn') + '">' +
+        (allOK ? '&#10003; All converted' : '&#9888; Issues found') + '</span>';
 
-      document.getElementById('statGrid').innerHTML =
-        stat(stats.total || 0, 'Total Equations', '') +
-        stat(stats.withImgTag || 0, 'IMG Tags Updated', 'ok') +
-        stat(tex.success || 0, 'TeX Success', 'ok') +
-        stat((tex.errors || 0) + (tex.warnings || 0), 'TeX Issues', (tex.errors || 0) > 0 ? 'fail' : 'warn') +
-        stat(alt.success || 0, 'AltText Success', 'ok') +
-        stat((alt.errors || 0) + (alt.warnings || 0), 'AltText Issues', (alt.errors || 0) > 0 ? 'fail' : 'warn');
+      document.getElementById('statsGrid').innerHTML =
+        sc(stats.total || 0,       'Total equations', '') +
+        sc(stats.withImgTag || 0,  'IMG tags updated', 'ok') +
+        sc(tex.success || 0,        'TeX success', 'ok') +
+        sc((tex.errors||0)+(tex.warnings||0), 'TeX issues', (tex.errors||0)>0?'fail':'warn') +
+        sc(alt.success || 0,        'AltText success', 'ok') +
+        sc((alt.errors||0)+(alt.warnings||0), 'AltText issues', (alt.errors||0)>0?'fail':'warn');
 
-      // Use Blob URLs for instant download — no second HTTP request needed
-      // This fixes slow downloads on Render/cloud free tier cold starts
       const ct = data.content || {};
-      let btns = '';
+      let cards = '';
 
-      function makeBlobBtn(text, filename, cssClass, label) {
+      function dlCard(text, filename, iconClass, icon, name, desc) {
         if (!text) return '';
         const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
         const url  = URL.createObjectURL(blob);
-        return '<a class="dl-btn ' + cssClass + '" href="' + url + '" download="' + filename + '">' + label + '</a>';
+        return '<a class="dl-card" href="' + url + '" download="' + filename + '">' +
+          '<div class="dl-card-icon ' + iconClass + '">' + icon + '</div>' +
+          '<div class="dl-card-body"><div class="dl-card-name">' + name + '</div><div class="dl-card-desc">' + desc + '</div></div>' +
+          '<div class="dl-card-arrow">&#8595;</div></a>';
       }
 
-      if (ct.txt) btns += makeBlobBtn(ct.txt, ct.txtName || 'equations.txt',    '',    '\u2B07 Download TXT (TeX + AltText output)');
-      if (ct.xml) btns += makeBlobBtn(ct.xml, ct.xmlName || 'modified.xml',    'xml', '\u2B07 Download Modified XML (img tags updated)');
-      if (ct.log) btns += makeBlobBtn(ct.log, ct.logName || 'log.txt',         'log', '\u2B07 Download Processing Log');
+      if (ct.txt) cards += dlCard(ct.txt, ct.txtName||'equations.txt', 'txt', '&#128196;', 'equations.txt', 'TeX + AltText + MathML for every equation');
+      if (ct.xml) cards += dlCard(ct.xml, ct.xmlName||'modified.xml',  'xml', '&#128196;', 'modified.xml',  'XML with tex="" alttext="" written to img tags');
+      if (ct.log) cards += dlCard(ct.log, ct.logName||'log.txt',       'log', '&#128196;', 'log.txt',       'Processing log with complexity analysis');
 
-      // Fallback to URL links if content not embedded
-      if (!btns) {
+      if (!cards) {
         const dl = data.downloads || {};
-        if (dl.txt) btns += '<a class="dl-btn" href="' + dl.txt + '" download>\u2B07 Download TXT</a>';
-        if (dl.xml) btns += '<a class="dl-btn xml" href="' + dl.xml + '" download>\u2B07 Download Modified XML</a>';
-        if (dl.log) btns += '<a class="dl-btn log" href="' + dl.log + '" download>\u2B07 Download Processing Log</a>';
+        if (dl.txt) cards += '<a class="dl-card" href="' + dl.txt + '" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+        if (dl.xml) cards += '<a class="dl-card" href="' + dl.xml + '" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+        if (dl.log) cards += '<a class="dl-card" href="' + dl.log + '" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
       }
 
-      document.getElementById('dlButtons').innerHTML = btns;
-
-      document.getElementById('result').style.display = 'block';
+      document.getElementById('dlCards').innerHTML = cards;
+      document.getElementById('results').style.display = 'block';
       document.getElementById('processBtn').disabled = false;
 
     } catch (e) {
-      document.getElementById('progress').style.display = 'none';
+      stopProgress(false);
       showError('Network error: ' + e.message);
       document.getElementById('processBtn').disabled = false;
     }
   }
 
-  function stat(num, label, cls) {
-    return '<div class="stat ' + cls + '"><div class="num">' + num + '</div><div class="lbl">' + label + '</div></div>';
+  function sc(num, label, cls) {
+    return '<div class="stat-card ' + cls + '"><div class="stat-num">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
   }
 
   function showError(msg) {
     const box = document.getElementById('errorBox');
-    box.textContent = '\u26a0 ' + msg;
+    box.textContent = '&#9888; ' + msg;
     box.style.display = 'block';
     document.getElementById('processBtn').disabled = false;
   }
@@ -1517,6 +1708,7 @@ app.get("/ui", (req, res) => {
 </body>
 </html>`);
 });
+
 
 // ── GET /health ──────────────────────────────────────────────────
 app.get("/health", (req, res) => {
