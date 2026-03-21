@@ -973,9 +973,49 @@ function buildLog(equations, filename, timestamp) {
 ================================================================ */
 
 async function processXML(rawXML, filename) {
-    // Parse DOM
-    const dom      = new JSDOM(rawXML, { contentType: "application/xml" });
-    const document = dom.window.document;
+
+    // ── Pre-process XML before parsing ──────────────────────────
+    // 1. Strip DOCTYPE declarations — JSDOM cannot resolve external DTDs
+    //    e.g. <!DOCTYPE chapter PUBLIC "..." "book570.dtd" [...]>
+    // 2. Strip internal subset entity declarations
+    // 3. Strip XML processing instructions that break parsers
+    let cleanXML = rawXML;
+
+    // Remove DOCTYPE block entirely (including internal subset [...])
+    cleanXML = cleanXML.replace(/<!DOCTYPE[^>[]*(?:\[[^\]]*\])?>/gi, "");
+
+    // Remove SYSTEM entity declarations
+    cleanXML = cleanXML.replace(/<!ENTITY[^>]*>/gi, "");
+
+    // Remove XML processing instructions (<?xml-stylesheet ...?>)
+    // but keep the <?xml version="1.0"?> declaration
+    cleanXML = cleanXML.replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
+
+    // Try parsing with application/xml first, fall back to text/html
+    // Both parsers handle malformed XML differently
+    let dom, document;
+
+    // Strategy 1: strict XML parser
+    try {
+        dom      = new JSDOM(cleanXML, {
+            contentType: "application/xml",
+        });
+        document = dom.window.document;
+        // Check if parser returned a parseerror document
+        if (document.querySelector("parsererror")) {
+            throw new Error("XML parse error — trying HTML parser");
+        }
+    } catch (e1) {
+        console.log(`  [INFO] XML parser failed (${e1.message.substring(0,60)}) — trying HTML parser`);
+        // Strategy 2: HTML parser (more lenient, handles broken XML)
+        try {
+            dom      = new JSDOM(cleanXML, { contentType: "text/html" });
+            document = dom.window.document;
+            console.log("  [INFO] HTML parser succeeded");
+        } catch (e2) {
+            throw new Error(`Cannot parse file: ${e2.message}`);
+        }
+    }
 
     const equations = [];
     let   xmlModified = false;
@@ -1734,12 +1774,26 @@ app.post("/process", upload.single("file"), async (req, res) => {
         return res.status(500).json({ error: `Cannot read uploaded file: ${e.message}` });
     }
 
-    // Process
+    // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
+    let cleanedXML = rawXML;
+    try {
+        cleanedXML = rawXML
+            .replace(/<!DOCTYPE[^>[]*(?:\[[^\]]*\])?>/gi, "")
+            .replace(/<!ENTITY[^>]*>/gi, "")
+            .replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
+    } catch (_) {}
+
+    // Process — always return JSON even if something throws
     let result;
     try {
-        result = await processXML(rawXML, origName);
+        result = await processXML(cleanedXML, origName);
     } catch (e) {
-        return res.status(500).json({ error: `Processing failed: ${e.message}` });
+        console.error("[ERROR] processXML failed:", e.message);
+        return res.status(500).json({
+            success: false,
+            error: `Processing failed: ${e.message}`,
+            hint:  "Check if the XML is valid. DOCTYPE with external DTD references are stripped automatically."
+        });
     }
 
     // Ensure OUTPUT folder exists (re-check at request time)
@@ -1868,10 +1922,16 @@ app.get("/download/:filename", (req, res) => {
 
 // ── Error handler ─────────────────────────────────────────────────
 app.use((err, req, res, next) => {
+    // Always return JSON — never let Express return an HTML error page
+    res.setHeader("Content-Type", "application/json");
     if (err.message && err.message.includes("Only .xml")) {
-        return res.status(400).json({ error: "Only .xml files are accepted" });
+        return res.status(400).json({ success: false, error: "Only .xml files are accepted" });
     }
-    res.status(500).json({ error: err.message || "Internal server error" });
+    if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ success: false, error: "File too large. Maximum size is 50MB." });
+    }
+    console.error("[ERROR] Unhandled:", err.message);
+    res.status(500).json({ success: false, error: err.message || "Internal server error" });
 });
 
 /* ================================================================
