@@ -54,6 +54,7 @@ app.use((req, res, next) => {
 // These only apply to JSON/urlencoded — multer handles multipart separately
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(express.raw({ type: "application/octet-stream", limit: "50mb" }));
 const UPLOAD = path.join(__dirname, "uploads");
 const OUTPUT = path.join(__dirname, "outputs");
 
@@ -1799,8 +1800,6 @@ a:hover{text-decoration:underline}
 .built-by{text-align:center;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:11px;color:var(--muted)}
 .built-by strong{color:var(--text);font-weight:500}
 </style>
-<!-- pako: fast gzip compression in browser - reduces large XML by 10x before upload -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 </head>
 <body>
 
@@ -2033,37 +2032,24 @@ a:hover{text-decoration:underline}
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
 
+    // Step 1: Wake server (ping health) then upload
+    // This prevents Render cold-start timeout on first request
+    document.getElementById('progressLabel').textContent = 'Connecting to server...';
+    fetch('/health')
+      .then(function() { return doUpload(); })
+      .catch(function() { return doUpload(); }); // proceed even if ping fails
+  }
+
+  function doUpload() {
     // Read file as text and send as JSON — avoids Render proxy multipart limits
     var reader = new FileReader();
     reader.onload = function(e) {
       var xmlText = e.target.result;
-      // Compress XML with gzip before sending — reduces 200KB → ~20KB
-      // This bypasses Render's proxy size limits entirely
-      var compressed, useGzip = false;
-      try {
-        if (typeof pako !== 'undefined') {
-          compressed = pako.gzip(xmlText);
-          useGzip = true;
-        }
-      } catch(compErr) { useGzip = false; }
-
-      var fetchOpts;
-      if (useGzip) {
-        fetchOpts = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream',
-                     'X-Filename': encodeURIComponent(selectedFile.name),
-                     'Content-Encoding': 'gzip' },
-          body: compressed
-        };
-      } else {
-        fetchOpts = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: selectedFile.name, content: xmlText })
-        };
-      }
-      fetch('/process', fetchOpts)
+      fetch('/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: selectedFile.name, content: xmlText })
+      })
       .then(function(resp) { return resp.text(); })
       .then(function(rawText) {
         var data;
@@ -2141,7 +2127,7 @@ a:hover{text-decoration:underline}
       document.getElementById('processBtn').disabled = false;
     };
     reader.readAsText(selectedFile);
-  }
+  } // end doUpload
 
   function sc(num, label, cls) {
     return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
@@ -2174,58 +2160,47 @@ app.get("/health", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-// Handle both gzip binary uploads AND JSON uploads
-function processMiddleware(req, res, next) {
-    const ct = req.headers['content-type'] || '';
-    if (ct.includes('application/octet-stream')) {
-        // Gzip compressed binary — collect raw body
-        const chunks = [];
-        req.on('data', chunk => chunks.push(chunk));
-        req.on('end', () => { req.rawBody = Buffer.concat(chunks); next(); });
-        req.on('error', next);
-    } else {
-        // JSON — use express.json
-        express.json({ limit: '50mb' })(req, res, next);
-    }
-}
-
-app.post("/process", processMiddleware, async (req, res) => {
+app.post("/process", async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
   // cause Express to return an HTML error page instead of JSON
   try {
 
-    // Parse body — supports gzip binary OR JSON
-    let origName, rawXML;
-    const ct = req.headers['content-type'] || '';
+    // ── Read XML from request body ────────────────────────────────
+    // Supports two modes:
+    //   1. application/json  → { filename, content } (plain text)
+    //   2. application/octet-stream → gzip binary (pako compressed)
+    let origName = "upload.xml";
+    let rawXML   = "";
 
-    if (ct.includes('application/octet-stream') && req.rawBody) {
-        // Decompress gzip binary
+    const ct = (req.headers["content-type"] || "").toLowerCase();
+    if (ct.includes("application/octet-stream") && Buffer.isBuffer(req.body)) {
+        // Gzip binary from pako
         try {
-            const zlib = require('zlib');
-            const decompressed = zlib.gunzipSync(req.rawBody);
-            rawXML   = decompressed.toString('utf8');
-            origName = decodeURIComponent(req.headers['x-filename'] || 'upload.xml');
-            console.log(`[INFO] Received gzip upload: ${origName} (${req.rawBody.length} bytes compressed → ${rawXML.length} chars)`);
+            const zlib = require("zlib");
+            rawXML   = zlib.gunzipSync(req.body).toString("utf8");
+            origName = decodeURIComponent(req.headers["x-filename"] || "upload.xml");
+            console.log(`[INFO] gzip upload: ${origName} compressed=${req.body.length}B uncompressed=${rawXML.length}B`);
         } catch (e) {
-            return res.status(400).json({ error: 'Failed to decompress upload: ' + e.message });
+            return res.status(400).json({ success: false, error: "Decompression failed: " + e.message });
         }
-    } else if (req.body && req.body.content) {
+    } else if (req.body && typeof req.body === "object" && req.body.content) {
         // Plain JSON body
         rawXML   = req.body.content;
-        origName = req.body.filename || 'upload.xml';
-        console.log(`[INFO] Received JSON upload: ${origName} (${rawXML.length} chars)`);
+        origName = req.body.filename || "upload.xml";
+        console.log(`[INFO] json upload: ${origName} size=${rawXML.length}B`);
     } else {
-        return res.status(400).json({ error: "No XML content received." });
+        console.error("[ERROR] No body — content-type:", ct, "body type:", typeof req.body);
+        return res.status(400).json({ success: false, error: "No XML content received. Expected JSON {filename, content} or gzip binary." });
+    }
+
+    if (!rawXML || !rawXML.trim()) {
+        return res.status(400).json({ success: false, error: "XML content is empty." });
     }
 
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
-
-    if (!rawXML || rawXML.trim().length === 0) {
-        return res.status(400).json({ error: "XML content is empty." });
-    }
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
     let cleanedXML = rawXML;
