@@ -972,48 +972,80 @@ function buildLog(equations, filename, timestamp) {
        → Return xmlContent as null (TXT only)
 ================================================================ */
 
+/* ================================================================
+   STRIP DOCTYPE — robust cleaner for XML with external DTD refs
+   Handles:
+   - <!DOCTYPE tag PUBLIC "..." "file.dtd">
+   - <!DOCTYPE tag PUBLIC "..." "file.dtd" [<!ENTITY ...>]>
+   - Multiple ENTITY declarations inside internal subset [...]
+   - Multiline DOCTYPE blocks
+================================================================ */
+function stripDOCTYPE(xml) {
+    let result = xml;
+
+    // Step 1: Find <!DOCTYPE and strip the whole block including [...]
+    const dtStart = result.indexOf("<!DOCTYPE");
+    if (dtStart !== -1) {
+        // Check if there is an internal subset [...]
+        const bracketOpen = result.indexOf("[", dtStart);
+        const firstGT     = result.indexOf(">", dtStart);
+
+        if (bracketOpen !== -1 && bracketOpen < firstGT) {
+            // Has internal subset — find matching ]>
+            const bracketClose = result.indexOf("]>", bracketOpen);
+            if (bracketClose !== -1) {
+                // Remove from <!DOCTYPE to ]> inclusive
+                result = result.slice(0, dtStart) + result.slice(bracketClose + 2);
+            } else {
+                // Fallback — remove from <!DOCTYPE to next >
+                result = result.slice(0, dtStart) + result.slice(firstGT + 1);
+            }
+        } else {
+            // No internal subset — remove from <!DOCTYPE to >
+            result = result.slice(0, dtStart) + result.slice(firstGT + 1);
+        }
+    }
+
+    // Step 2: Strip any remaining <!ENTITY declarations
+    result = result.replace(/<!ENTITY[^>]*>/gi, "");
+
+    // Step 3: Strip XML processing instructions (but keep <?xml ...?>)
+    result = result.replace(/<\?(?!xml)[\s\S]*?\?>/gi, "");
+
+    // Step 4: Strip XML comments that contain DOCTYPE-like content
+    // (some publishers embed broken content in comments)
+    // Keep normal comments — only strip if they break parsing
+
+    // Step 5: Normalize line endings
+    result = result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    return result.trim();
+}
+
 async function processXML(rawXML, filename) {
 
-    // ── Pre-process XML before parsing ──────────────────────────
-    // 1. Strip DOCTYPE declarations — JSDOM cannot resolve external DTDs
-    //    e.g. <!DOCTYPE chapter PUBLIC "..." "book570.dtd" [...]>
-    // 2. Strip internal subset entity declarations
-    // 3. Strip XML processing instructions that break parsers
+    // Pre-process XML — use shared stripDOCTYPE function
     let cleanXML = rawXML;
-
-    // Remove DOCTYPE block entirely (including internal subset [...])
-    cleanXML = cleanXML.replace(/<!DOCTYPE[^>[]*(?:\[[^\]]*\])?>/gi, "");
-
-    // Remove SYSTEM entity declarations
-    cleanXML = cleanXML.replace(/<!ENTITY[^>]*>/gi, "");
-
-    // Remove XML processing instructions (<?xml-stylesheet ...?>)
-    // but keep the <?xml version="1.0"?> declaration
-    cleanXML = cleanXML.replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
+    try { cleanXML = stripDOCTYPE(rawXML); } catch (_) {}
 
     // Try parsing with application/xml first, fall back to text/html
-    // Both parsers handle malformed XML differently
     let dom, document;
 
     // Strategy 1: strict XML parser
     try {
-        dom      = new JSDOM(cleanXML, {
-            contentType: "application/xml",
-        });
+        dom      = new JSDOM(cleanXML, { contentType: "application/xml" });
         document = dom.window.document;
-        // Check if parser returned a parseerror document
         if (document.querySelector("parsererror")) {
-            throw new Error("XML parse error — trying HTML parser");
+            throw new Error("parsererror in document");
         }
     } catch (e1) {
-        console.log(`  [INFO] XML parser failed (${e1.message.substring(0,60)}) — trying HTML parser`);
-        // Strategy 2: HTML parser (more lenient, handles broken XML)
+        console.log(`  [INFO] XML parser issue (${e1.message.substring(0,80)}) — trying HTML parser`);
         try {
             dom      = new JSDOM(cleanXML, { contentType: "text/html" });
             document = dom.window.document;
             console.log("  [INFO] HTML parser succeeded");
         } catch (e2) {
-            throw new Error(`Cannot parse file: ${e2.message}`);
+            throw new Error(`Cannot parse XML: ${e2.message}`);
         }
     }
 
@@ -1775,13 +1807,14 @@ app.post("/process", upload.single("file"), async (req, res) => {
     }
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
+    // Uses a step-by-step string approach to handle complex internal subsets
+    // e.g. <!DOCTYPE chapter PUBLIC "..." "book.dtd" [<!ENTITY ...>]>
     let cleanedXML = rawXML;
     try {
-        cleanedXML = rawXML
-            .replace(/<!DOCTYPE[^>[]*(?:\[[^\]]*\])?>/gi, "")
-            .replace(/<!ENTITY[^>]*>/gi, "")
-            .replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
-    } catch (_) {}
+        cleanedXML = stripDOCTYPE(rawXML);
+    } catch (_) {
+        cleanedXML = rawXML;
+    }
 
     // Process — always return JSON even if something throws
     let result;
