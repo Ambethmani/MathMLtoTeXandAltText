@@ -54,7 +54,6 @@ app.use((req, res, next) => {
 // These only apply to JSON/urlencoded — multer handles multipart separately
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
-app.use(express.raw({ type: "application/octet-stream", limit: "50mb" }));
 const UPLOAD = path.join(__dirname, "uploads");
 const OUTPUT = path.join(__dirname, "outputs");
 
@@ -2032,24 +2031,10 @@ a:hover{text-decoration:underline}
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
 
-    // Step 1: Wake server (ping health) then upload
-    // This prevents Render cold-start timeout on first request
-    document.getElementById('progressLabel').textContent = 'Connecting to server...';
-    fetch('/health')
-      .then(function() { return doUpload(); })
-      .catch(function() { return doUpload(); }); // proceed even if ping fails
-  }
+    var formData = new FormData();
+    formData.append('file', selectedFile);
 
-  function doUpload() {
-    // Read file as text and send as JSON — avoids Render proxy multipart limits
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      var xmlText = e.target.result;
-      fetch('/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: selectedFile.name, content: xmlText })
-      })
+    fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) { return resp.text(); })
       .then(function(rawText) {
         var data;
@@ -2120,14 +2105,7 @@ a:hover{text-decoration:underline}
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
-    }; // end reader.onload
-    reader.onerror = function() {
-      stopProgress(false);
-      showError('Failed to read file');
-      document.getElementById('processBtn').disabled = false;
-    };
-    reader.readAsText(selectedFile);
-  } // end doUpload
+
 
   function sc(num, label, cls) {
     return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
@@ -2160,47 +2138,31 @@ app.get("/health", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-app.post("/process", async (req, res) => {
+app.post("/process", upload.single("file"), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
   // cause Express to return an HTML error page instead of JSON
   try {
 
-    // ── Read XML from request body ────────────────────────────────
-    // Supports two modes:
-    //   1. application/json  → { filename, content } (plain text)
-    //   2. application/octet-stream → gzip binary (pako compressed)
-    let origName = "upload.xml";
-    let rawXML   = "";
-
-    const ct = (req.headers["content-type"] || "").toLowerCase();
-    if (ct.includes("application/octet-stream") && Buffer.isBuffer(req.body)) {
-        // Gzip binary from pako
-        try {
-            const zlib = require("zlib");
-            rawXML   = zlib.gunzipSync(req.body).toString("utf8");
-            origName = decodeURIComponent(req.headers["x-filename"] || "upload.xml");
-            console.log(`[INFO] gzip upload: ${origName} compressed=${req.body.length}B uncompressed=${rawXML.length}B`);
-        } catch (e) {
-            return res.status(400).json({ success: false, error: "Decompression failed: " + e.message });
-        }
-    } else if (req.body && typeof req.body === "object" && req.body.content) {
-        // Plain JSON body
-        rawXML   = req.body.content;
-        origName = req.body.filename || "upload.xml";
-        console.log(`[INFO] json upload: ${origName} size=${rawXML.length}B`);
-    } else {
-        console.error("[ERROR] No body — content-type:", ct, "body type:", typeof req.body);
-        return res.status(400).json({ success: false, error: "No XML content received. Expected JSON {filename, content} or gzip binary." });
+    // ── Read uploaded file ───────────────────────────────────────
+    if (!req.file) {
+        return res.status(400).json({ success: false, error: "No file uploaded." });
     }
-
-    if (!rawXML || !rawXML.trim()) {
-        return res.status(400).json({ success: false, error: "XML content is empty." });
-    }
-
+    const origName  = req.file.originalname;
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
+
+    let rawXML;
+    try {
+        rawXML = fs.readFileSync(req.file.path, "utf8");
+    } catch (e) {
+        return res.status(500).json({ success: false, error: "Cannot read file: " + e.message });
+    }
+    if (!rawXML || !rawXML.trim()) {
+        return res.status(400).json({ success: false, error: "File is empty." });
+    }
+    console.log(`[INFO] Received: ${origName} (${rawXML.length} chars)`);
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
     let cleanedXML = rawXML;
@@ -2273,7 +2235,8 @@ app.post("/process", async (req, res) => {
         console.error(`[ERROR] Cannot save LOG: ${e.message}`);
     }
 
-    // No disk cleanup needed — file was sent as JSON body, never written to disk
+    // Clean up uploaded file from disk
+    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
