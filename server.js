@@ -2031,10 +2031,15 @@ a:hover{text-decoration:underline}
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
 
-    var formData = new FormData();
-    formData.append('file', selectedFile);
-
-    fetch('/process', { method: 'POST', body: formData })
+    // Read file as text and send as JSON — avoids Render proxy multipart limits
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var xmlText = e.target.result;
+      fetch('/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: selectedFile.name, content: xmlText })
+      })
       .then(function(resp) { return resp.text(); })
       .then(function(rawText) {
         var data;
@@ -2105,6 +2110,13 @@ a:hover{text-decoration:underline}
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
+    }; // end reader.onload
+    reader.onerror = function() {
+      stopProgress(false);
+      showError('Failed to read file');
+      document.getElementById('processBtn').disabled = false;
+    };
+    reader.readAsText(selectedFile);
   }
 
   function sc(num, label, cls) {
@@ -2138,27 +2150,25 @@ app.get("/health", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-app.post("/process", upload.single("file"), async (req, res) => {
+app.post("/process", express.json({ limit: "50mb" }), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
   // cause Express to return an HTML error page instead of JSON
   try {
 
-    if (!req.file) {
-        return res.status(400).json({ error: "No file uploaded. Send XML file as multipart field named 'file'" });
+    // Accept JSON body {filename, content} — sent by browser FileReader
+    if (!req.body || !req.body.content) {
+        return res.status(400).json({ error: "No XML content received. Send JSON body with {filename, content} fields." });
     }
 
-    const origName  = req.file.originalname;
+    const origName  = req.body.filename || "upload.xml";
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
+    const rawXML    = req.body.content;
 
-    // Read from disk (disk storage streams the upload — no body size limit issues)
-    let rawXML;
-    try {
-        rawXML = fs.readFileSync(req.file.path, "utf8");
-    } catch (e) {
-        return res.status(500).json({ error: `Cannot read uploaded file: ${e.message}` });
+    if (!rawXML || rawXML.trim().length === 0) {
+        return res.status(400).json({ error: "XML content is empty." });
     }
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
@@ -2232,8 +2242,7 @@ app.post("/process", upload.single("file"), async (req, res) => {
         console.error(`[ERROR] Cannot save LOG: ${e.message}`);
     }
 
-    // Clean up upload file from disk
-    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
+    // No disk cleanup needed — file was sent as JSON body, never written to disk
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
