@@ -1028,18 +1028,78 @@ async function processXML(rawXML, filename) {
     let cleanXML = rawXML;
     try { cleanXML = stripDOCTYPE(rawXML); } catch (_) {}
 
-    // Try parsing with application/xml first, fall back to text/html
+    // ── Inject missing namespace declarations ──────────────────
+    // Many Elsevier/publisher XMLs use namespace prefixes (ce:, mml:, xlink:)
+    // without declaring them on the root element — inject them so the
+    // XML parser doesn't throw "unbound namespace prefix" errors
+    const KNOWN_NAMESPACES = {
+        "ce":    "http://www.elsevier.com/xml/common/dtd",
+        "mml":   "http://www.w3.org/1998/Math/MathML",
+        "xlink": "http://www.w3.org/1999/xlink",
+        "xl":    "http://www.w3.org/1999/xlink",
+        "aid":   "http://ns.adobe.com/AdobeInDesign/4.0/",
+        "sb":    "http://www.elsevier.com/xml/common/struct-bib/dtd",
+        "ja":    "http://www.elsevier.com/xml/ja/dtd",
+        "bk":    "http://www.elsevier.com/xml/bk/dtd",
+        "cals":  "http://www.oasis-open.org/specs/tm9502.html",
+        "oasis": "http://docs.oasis-open.org/ns/oasis-exchange/table",
+        "xs":    "http://www.w3.org/2001/XMLSchema"
+    };
+
+    function injectNamespaces(xml) {
+        // Find the root element opening tag
+        const rootMatch = xml.match(/<([a-zA-Z][a-zA-Z0-9_:-]*)(\s[^>]*)?>/);
+        if (!rootMatch) return xml;
+
+        const fullTag    = rootMatch[0];
+        const tagName    = rootMatch[1];
+        const existingAttrs = rootMatch[2] || "";
+
+        // Detect which namespace prefixes are actually used in the document
+        const usedPrefixes = new Set();
+        const prefixRe = /<([a-zA-Z][a-zA-Z0-9]*):([a-zA-Z])/g;
+        let m;
+        while ((m = prefixRe.exec(xml)) !== null) {
+            usedPrefixes.add(m[1]);
+        }
+
+        // Build missing namespace declarations
+        let extraNS = "";
+        for (const [prefix, uri] of Object.entries(KNOWN_NAMESPACES)) {
+            if (usedPrefixes.has(prefix) && !existingAttrs.includes(`xmlns:${prefix}`)) {
+                extraNS += ` xmlns:${prefix}="${uri}"`;
+            }
+        }
+
+        if (!extraNS) return xml; // nothing to inject
+
+        // Also ensure root has xmlns if missing
+        if (!existingAttrs.includes("xmlns=") && !tagName.includes(":")) {
+            extraNS += ` xmlns="http://www.elsevier.com/xml/bk/dtd"`;
+        }
+
+        const newTag = `<${tagName}${existingAttrs}${extraNS}>`;
+        return xml.replace(fullTag, newTag);
+    }
+
+    cleanXML = injectNamespaces(cleanXML);
+
+    // ── Parse with fallback strategy ─────────────────────────────
     let dom, document;
 
-    // Strategy 1: strict XML parser
+    // Strategy 1: strict XML parser (best — preserves namespaces)
     try {
         dom      = new JSDOM(cleanXML, { contentType: "application/xml" });
         document = dom.window.document;
         if (document.querySelector("parsererror")) {
-            throw new Error("parsererror in document");
+            const errText = document.querySelector("parsererror").textContent.substring(0, 120);
+            throw new Error(`parsererror: ${errText}`);
         }
+        console.log("  [INFO] XML parser succeeded");
     } catch (e1) {
-        console.log(`  [INFO] XML parser issue (${e1.message.substring(0,80)}) — trying HTML parser`);
+        console.log(`  [INFO] XML parser issue: ${e1.message.substring(0,100)}`);
+        console.log("  [INFO] Trying HTML parser...");
+        // Strategy 2: HTML parser — more lenient, handles broken XML
         try {
             dom      = new JSDOM(cleanXML, { contentType: "text/html" });
             document = dom.window.document;
@@ -1064,12 +1124,15 @@ async function processXML(rawXML, filename) {
         const tex = texRes.value;
         const alt = altRes.value;
 
-        // Find img tag — search all variants
+        // Find img tag — search all variants including ce: prefixed
+        const eqEls = [...(eq.getElementsByTagName("*") || [])];
         const imgEl =
-            eq.querySelector("inline-graphic")    ||
-            eq.querySelector("graphic")            ||
-            eq.querySelector("span.eqnimg img")    ||
-            eq.querySelector("img.inlinegraphic")  ||
+            eq.querySelector("inline-graphic")            ||
+            eq.querySelector("graphic")                    ||
+            eqEls.find(el => el.tagName.toLowerCase() === "ce:inline-graphic") ||
+            eqEls.find(el => el.tagName.toLowerCase() === "ce:graphic")        ||
+            eq.querySelector("span.eqnimg img")            ||
+            eq.querySelector("img.inlinegraphic")          ||
             eq.querySelector("img");
 
         if (imgEl) {
@@ -1114,12 +1177,29 @@ async function processXML(rawXML, filename) {
     }
 
     // ── FORMAT 1: JATS inline-formula ────────────────────────────
-    for (const [i, eq] of [...document.querySelectorAll("inline-formula")].entries()) {
+    // Handles both plain <inline-formula> and namespace-prefixed versions
+    // querySelectorAll does not support namespace prefixes — use tagName filter
+    const allInlineFormulas = [...document.querySelectorAll(
+        "inline-formula, ce\\:inline-formula"
+    )].filter(el =>
+        el.tagName.toLowerCase().includes("inline-formula")
+    );
+    // Also catch via tagName for namespace-prefixed elements
+    const allEls = [...document.getElementsByTagName("*")];
+    const inlineFormulas = allEls.filter(el =>
+        el.tagName.toLowerCase() === "inline-formula" ||
+        el.tagName.toLowerCase() === "ce:inline-formula"
+    );
+    for (const [i, eq] of inlineFormulas.entries()) {
         await processFormula(eq, "Inline Equation", "JATS", `inline-${i+1}`);
     }
 
     // ── FORMAT 1: JATS disp-formula ──────────────────────────────
-    for (const [i, eq] of [...document.querySelectorAll("disp-formula")].entries()) {
+    const dispFormulas = allEls.filter(el =>
+        el.tagName.toLowerCase() === "disp-formula" ||
+        el.tagName.toLowerCase() === "ce:disp-formula"
+    );
+    for (const [i, eq] of dispFormulas.entries()) {
         await processFormula(eq, "Display Equation", "JATS", `disp-${i+1}`);
     }
 
