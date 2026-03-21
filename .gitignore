@@ -1,0 +1,6 @@
+node_modules/
+uploads/
+outputs/
+*.bat
+.env
+package-lock.json
