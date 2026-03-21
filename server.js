@@ -1745,7 +1745,7 @@ a:hover{text-decoration:underline}
       </div>
       <div class="panel-body">
 
-        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <div class="drop-zone" id="dropZone">
           <div class="drop-icon">&#128196;</div>
           <div class="drop-title">Drop your XML file here</div>
           <div class="drop-sub">or <span>click to browse</span></div>
@@ -1841,12 +1841,27 @@ a:hover{text-decoration:underline}
 <script>
   const dropZone  = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
+  const overlay   = document.getElementById('dragOverlay');
   let selectedFile = null;
+  let dragCounter  = 0;
 
-  // ── Prevent browser from opening XML files dropped anywhere on page ──
-  const overlay = document.getElementById('dragOverlay');
-  let dragCounter = 0;
+  // ── All drag/drop logic in one place ──────────────────────────
+  // KEY DESIGN:
+  //   - document handlers prevent browser from opening the XML file
+  //   - A single handleFile() function processes the dropped file
+  //   - We use a flag to avoid double-processing
+  let fileHandled = false;
 
+  function handleFile(f) {
+    if (!f) return;
+    if (!f.name.toLowerCase().endsWith('.xml')) {
+      showError('Please select an .xml file.');
+      return;
+    }
+    setFile(f);
+  }
+
+  // Document-level: block browser from navigating to dropped file
   document.addEventListener('dragenter', e => {
     e.preventDefault();
     dragCounter++;
@@ -1854,33 +1869,48 @@ a:hover{text-decoration:underline}
   });
   document.addEventListener('dragleave', e => {
     e.preventDefault();
-    dragCounter--;
-    if (dragCounter <= 0) { dragCounter = 0; if (overlay) overlay.style.display = 'none'; }
+    dragCounter = Math.max(0, dragCounter - 1);
+    if (dragCounter === 0 && overlay) overlay.style.display = 'none';
   });
-  document.addEventListener('dragover', e => { e.preventDefault(); });
+  document.addEventListener('dragover', e => {
+    e.preventDefault(); // required to allow drop
+  });
   document.addEventListener('drop', e => {
     e.preventDefault();
     dragCounter = 0;
     if (overlay) overlay.style.display = 'none';
     dropZone.classList.remove('dragover');
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f && f.name.toLowerCase().endsWith('.xml')) {
-      setFile(f);
-    } else if (f) {
-      showError('Please drop an .xml file.');
-    }
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    handleFile(f);
   });
 
-  dropZone.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('dragover'); });
-  dropZone.addEventListener('dragleave', e => { e.stopPropagation(); dropZone.classList.remove('dragover'); });
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault(); e.stopPropagation();
-    dropZone.classList.remove('dragover');
-    const f = e.dataTransfer.files[0];
-    if (f && f.name.toLowerCase().endsWith('.xml')) setFile(f);
-    else showError('Please drop an .xml file.');
+  // Drop zone visual feedback — stopPropagation so document drop
+  // does NOT also fire (prevents double handling)
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.add('dragover');
   });
-  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+  dropZone.addEventListener('dragleave', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.remove('dragover');
+  });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    e.stopPropagation(); // stop document drop from also firing
+    dragCounter = 0;
+    if (overlay) overlay.style.display = 'none';
+    dropZone.classList.remove('dragover');
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    handleFile(f);
+  });
+
+  // Browse button
+  dropZone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
 
   function setFile(f) {
     selectedFile = f;
