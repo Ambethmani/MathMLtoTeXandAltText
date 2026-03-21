@@ -30,9 +30,6 @@ process.on("unhandledRejection", (reason, promise) => {
     // Don't exit — keep server running
 });
 
-// Increase express body size limit for large XML files
-app.use(require("express").raw({ limit: "20mb" }));
-
 // Enable CORS — allows browser clients and external services to call the API
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin",  "*");
