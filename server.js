@@ -16,6 +16,20 @@ const express = require("express");
 const app    = express();
 const PORT   = process.env.PORT || 3000;
 
+// ── Global uncaught error handlers ──────────────────────────────
+// Prevents Render/Node from crashing on unhandled promise rejections
+// These are critical on cloud deployments
+process.on("uncaughtException", (err) => {
+    console.error("[FATAL] Uncaught Exception:", err.message);
+    console.error(err.stack);
+    // Don't exit — keep server running
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("[FATAL] Unhandled Promise Rejection:", reason);
+    // Don't exit — keep server running
+});
+
 // Enable CORS — allows browser clients and external services to call the API
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin",  "*");
@@ -1902,7 +1916,22 @@ a:hover{text-decoration:underline}
 
     try {
       const resp = await fetch('/process', { method: 'POST', body: formData });
-      const data = await resp.json();
+
+      // Safe JSON parse — handles cases where server returns HTML error page
+      let data;
+      const rawText = await resp.text();
+      try {
+        data = JSON.parse(rawText);
+      } catch (jsonErr) {
+        stopProgress(false);
+        // Server returned non-JSON (HTML error page) — extract useful info
+        const match = rawText.match(/<pre>([\s\S]*?)<\/pre>/i) ||
+                      rawText.match(/Error[:\s]+([\s\S]{0,200})/i);
+        const hint = match ? match[1].substring(0, 200) : rawText.substring(0, 200);
+        showError('Server error: ' + hint.replace(/<[^>]+>/g, '').trim());
+        return;
+      }
+
       stopProgress(data.success);
 
       if (!data.success) { showError(data.error || 'Processing failed'); return; }
@@ -1982,6 +2011,11 @@ app.get("/health", (req, res) => {
 
 // ── POST /process — main endpoint ───────────────────────────────
 app.post("/process", upload.single("file"), async (req, res) => {
+  // ── Top-level safety net — always return JSON, never HTML ──────
+  // Catches any error that slips past inner try-catch blocks
+  // This is critical on cloud deployments where unhandled errors
+  // cause Express to return an HTML error page instead of JSON
+  try {
 
     if (!req.file) {
         return res.status(400).json({ error: "No file uploaded. Send XML file as multipart field named 'file'" });
@@ -2128,6 +2162,20 @@ app.post("/process", upload.single("file"), async (req, res) => {
     };
 
     res.json(response);
+
+  } catch (topLevelErr) {
+    // Catch-all — should never reach here, but ensures JSON response
+    console.error("[ERROR] Unhandled error in /process route:", topLevelErr.message);
+    console.error(topLevelErr.stack);
+    if (!res.headersSent) {
+        res.setHeader("Content-Type", "application/json");
+        res.status(500).json({
+            success: false,
+            error:   "Internal server error: " + (topLevelErr.message || "unknown"),
+            hint:    "Check server logs for details"
+        });
+    }
+  }
 });
 
 // ── GET /download/:filename — download output files ──────────────
