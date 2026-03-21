@@ -1086,6 +1086,47 @@ function stripDOCTYPE(xml) {
 
 async function processXML(rawXML, filename) {
 
+    // ── Fast pre-check: does this XML contain any equations? ─────
+    // If no math/formula tags found anywhere, skip heavy DOM parsing
+    // and return immediately with empty equations array.
+    // This makes no-equation files process in milliseconds.
+    const hasMath = (
+        rawXML.indexOf("<math")          !== -1 ||
+        rawXML.indexOf("<mml:math")      !== -1 ||
+        rawXML.indexOf("inline-formula") !== -1 ||
+        rawXML.indexOf("disp-formula")   !== -1 ||
+        rawXML.indexOf("InlineEquation") !== -1 ||
+        rawXML.indexOf("<Equation")      !== -1 ||
+        rawXML.indexOf("type=\"eqn\"")  !== -1 ||
+        rawXML.indexOf("type='eqn'")   !== -1
+    );
+
+    if (!hasMath) {
+        console.log("  [INFO] No math/equation tags found — skipping DOM parse");
+        const SEP = "=".repeat(64);
+        const txtContent = [
+            SEP,
+            "  MathMLtoTeXandAltText — Output",
+            `  Source  : ${filename}`,
+            `  Found   : 0 equation(s)`,
+            `  Date    : ${new Date().toLocaleString()}`,
+            SEP,
+            "",
+            "  No equations found in this XML file.",
+            "",
+            SEP,
+            "  End of Output",
+            SEP
+        ].join("\n");
+        return {
+            equations:   [],
+            txtContent,
+            xmlContent:  null,
+            xmlModified: false,
+            logContent:  buildLog([], filename, Date.now())
+        };
+    }
+
     // Pre-process XML — use shared stripDOCTYPE function
     let cleanXML = rawXML;
     try { cleanXML = stripDOCTYPE(rawXML); } catch (_) {}
@@ -1109,6 +1150,9 @@ async function processXML(rawXML, filename) {
     };
 
     function injectNamespaces(xml) {
+        // Fast approach: only scan first 2000 chars for the root tag
+        // and scan full XML only for prefixes we need to inject.
+        // This avoids slow full-document regex on large files.
         const rootMatch = xml.match(/<([a-zA-Z][a-zA-Z0-9_:-]*)(\s[^>]*)?>/);
         if (!rootMatch) return xml;
 
@@ -1116,40 +1160,36 @@ async function processXML(rawXML, filename) {
         const tagName       = rootMatch[1];
         const existingAttrs = rootMatch[2] || "";
 
-        // Detect ALL namespace prefixes — both element and attribute level
-        const usedPrefixes = new Set();
-
-        // Element prefixes: <prefix:tag
-        let m;
-        const elemRe = /<([a-zA-Z][a-zA-Z0-9_]*):[a-zA-Z]/g;
-        while ((m = elemRe.exec(xml)) !== null) usedPrefixes.add(m[1]);
-
-        // Attribute prefixes: prefix:attr= (e.g. xlink:href=)
-        const attrRe = /\b([a-zA-Z][a-zA-Z0-9_]*):[a-zA-Z][a-zA-Z0-9_]*\s*=/g;
-        while ((m = attrRe.exec(xml)) !== null) {
-            if (m[1] !== "xmlns") usedPrefixes.add(m[1]);
-        }
-
-        console.log("  [INFO] Detected prefixes: " + [...usedPrefixes].join(", "));
-
-        // Build missing xmlns declarations
-        let extraNS = "";
+        // Only inject namespaces that are not already declared
+        const missing = [];
         for (const [prefix, uri] of Object.entries(KNOWN_NAMESPACES)) {
-            if (usedPrefixes.has(prefix) && !existingAttrs.includes("xmlns:" + prefix)) {
-                extraNS += " xmlns:" + prefix + '="' + uri + '"';
+            if (!existingAttrs.includes("xmlns:" + prefix)) {
+                missing.push([prefix, uri]);
+            }
+        }
+        if (missing.length === 0) return xml; // all already declared
+
+        // Scan only for prefixes that are actually missing
+        // Use indexOf for speed — much faster than regex on large files
+        const usedPrefixes = new Set();
+        for (const [prefix] of missing) {
+            // Quick check: does this prefix appear anywhere?
+            if (xml.indexOf("<" + prefix + ":") !== -1 ||
+                xml.indexOf(" " + prefix + ":") !== -1) {
+                usedPrefixes.add(prefix);
             }
         }
 
-        // Any unrecognised prefix — add placeholder so parser doesn't fail
-        for (const prefix of usedPrefixes) {
-            if (!KNOWN_NAMESPACES[prefix] && prefix !== "xml" && !existingAttrs.includes("xmlns:" + prefix)) {
-                extraNS += " xmlns:" + prefix + '="urn:unknown:' + prefix + '"';
-                console.log("  [WARN] Added placeholder for unknown prefix: " + prefix);
+        let extraNS = "";
+        for (const [prefix, uri] of missing) {
+            if (usedPrefixes.has(prefix)) {
+                extraNS += " xmlns:" + prefix + '="' + uri + '"';
             }
         }
 
         if (!extraNS) return xml;
         const newTag = "<" + tagName + existingAttrs + extraNS + ">";
+        // Only replace the first occurrence (root tag)
         return xml.replace(fullTag, newTag);
     }
 
