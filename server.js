@@ -1712,14 +1712,6 @@ a:hover{text-decoration:underline}
 </head>
 <body>
 
-<div id="dragOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(79,142,247,0.15);border:3px dashed var(--blue);z-index:9999;pointer-events:none;align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 40px;text-align:center">
-    <div style="font-size:40px;margin-bottom:8px">&#128196;</div>
-    <div style="font-size:16px;font-weight:600;color:var(--text)">Drop XML file here</div>
-    <div style="font-size:13px;color:var(--muted);margin-top:4px">Release to upload</div>
-  </div>
-</div>
-
 <nav class="nav">
   <div class="nav-logo">
     <div class="nav-logo-icon">M</div>
@@ -1839,80 +1831,43 @@ a:hover{text-decoration:underline}
 </div>
 
 <script>
-  const dropZone  = document.getElementById('dropZone');
-  const fileInput = document.getElementById('fileInput');
-  const overlay   = document.getElementById('dragOverlay');
-  let selectedFile = null;
-  let dragCounter  = 0;
+  // ── Simple, reliable file handling ──────────────────────────
+  var selectedFile = null;
 
-  // ── All drag/drop logic in one place ──────────────────────────
-  // KEY DESIGN:
-  //   - document handlers prevent browser from opening the XML file
-  //   - A single handleFile() function processes the dropped file
-  //   - We use a flag to avoid double-processing
-  let fileHandled = false;
+  // Block browser from opening dropped files on the page
+  document.addEventListener('dragover', function(e) { e.preventDefault(); });
+  document.addEventListener('drop', function(e) { e.preventDefault(); });
 
-  function handleFile(f) {
-    if (!f) return;
+  // Drop zone
+  var dz = document.getElementById('dropZone');
+  dz.addEventListener('dragover', function(e) {
+    e.preventDefault(); e.stopPropagation();
+    dz.classList.add('dragover');
+  });
+  dz.addEventListener('dragleave', function(e) {
+    e.stopPropagation();
+    dz.classList.remove('dragover');
+  });
+  dz.addEventListener('drop', function(e) {
+    e.preventDefault(); e.stopPropagation();
+    dz.classList.remove('dragover');
+    var f = e.dataTransfer.files[0];
+    if (f) setFile(f);
+  });
+  dz.addEventListener('click', function() {
+    document.getElementById('fileInput').click();
+  });
+
+  // Browse button
+  document.getElementById('fileInput').addEventListener('change', function() {
+    if (this.files[0]) setFile(this.files[0]);
+  });
+
+  function setFile(f) {
     if (!f.name.toLowerCase().endsWith('.xml')) {
       showError('Please select an .xml file.');
       return;
     }
-    setFile(f);
-  }
-
-  // Document-level: block browser from navigating to dropped file
-  document.addEventListener('dragenter', e => {
-    e.preventDefault();
-    dragCounter++;
-    if (overlay) overlay.style.display = 'flex';
-  });
-  document.addEventListener('dragleave', e => {
-    e.preventDefault();
-    dragCounter = Math.max(0, dragCounter - 1);
-    if (dragCounter === 0 && overlay) overlay.style.display = 'none';
-  });
-  document.addEventListener('dragover', e => {
-    e.preventDefault(); // required to allow drop
-  });
-  document.addEventListener('drop', e => {
-    e.preventDefault();
-    dragCounter = 0;
-    if (overlay) overlay.style.display = 'none';
-    dropZone.classList.remove('dragover');
-    const f = e.dataTransfer && e.dataTransfer.files[0];
-    handleFile(f);
-  });
-
-  // Drop zone visual feedback — stopPropagation so document drop
-  // does NOT also fire (prevents double handling)
-  dropZone.addEventListener('dragover', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.classList.add('dragover');
-  });
-  dropZone.addEventListener('dragleave', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.classList.remove('dragover');
-  });
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    e.stopPropagation(); // stop document drop from also firing
-    dragCounter = 0;
-    if (overlay) overlay.style.display = 'none';
-    dropZone.classList.remove('dragover');
-    const f = e.dataTransfer && e.dataTransfer.files[0];
-    handleFile(f);
-  });
-
-  // Browse button
-  dropZone.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) handleFile(fileInput.files[0]);
-  });
-
-  function setFile(f) {
     selectedFile = f;
     document.getElementById('fileName').textContent = f.name;
     document.getElementById('fileSize').textContent = (f.size / 1024).toFixed(1) + ' KB';
@@ -1925,7 +1880,7 @@ a:hover{text-decoration:underline}
 
   function removeFile() {
     selectedFile = null;
-    fileInput.value = '';
+    document.getElementById('fileInput').value = '';
     document.getElementById('fileInfo').style.display = 'none';
     document.getElementById('dropZone').style.display = 'block';
     document.getElementById('processBtn').disabled = true;
@@ -1937,23 +1892,24 @@ a:hover{text-decoration:underline}
     document.getElementById('progressArea').style.display = 'none';
   }
 
-  let progTimer = null;
+  // ── Progress bar ────────────────────────────────────────────
+  var progTimer = null;
+
   function startProgress() {
-    const steps   = ['step1','step2','step3','step4','step5'];
-    const labels  = ['Uploading...','Parsing MathML...','Converting to TeX...','Generating AltText...','Writing outputs...'];
-    const targets = [15, 35, 65, 85, 95];
-    let cur = 0, pct = 0;
+    var steps   = ['step1','step2','step3','step4','step5'];
+    var labels  = ['Uploading...','Parsing MathML...','Converting to TeX...','Generating AltText...','Writing outputs...'];
+    var targets = [15, 35, 65, 85, 95];
+    var cur = 0, pct = 0;
 
     document.getElementById('progressArea').style.display = 'block';
-    steps.forEach(s => { document.getElementById(s).className = 'step'; });
+    steps.forEach(function(s) { document.getElementById(s).className = 'step'; });
 
-    progTimer = setInterval(() => {
+    progTimer = setInterval(function() {
       if (cur < steps.length) {
         document.getElementById(steps[cur]).className = 'step active';
         document.getElementById('progressLabel').textContent = labels[cur];
-        const target = targets[cur];
-        if (pct < target) {
-          pct = Math.min(pct + 2, target);
+        if (pct < targets[cur]) {
+          pct = Math.min(pct + 2, targets[cur]);
           document.getElementById('progressBar').style.width = pct + '%';
           document.getElementById('progressPct').textContent = pct + '%';
         } else { cur++; }
@@ -1963,105 +1919,104 @@ a:hover{text-decoration:underline}
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
-    const steps = ['step1','step2','step3','step4','step5'];
-    steps.forEach(s => { document.getElementById(s).className = 'step done'; });
+    var steps = ['step1','step2','step3','step4','step5'];
+    steps.forEach(function(s) { document.getElementById(s).className = 'step done'; });
     document.getElementById('progressBar').style.width = '100%';
     document.getElementById('progressPct').textContent = '100%';
     document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
-    setTimeout(() => { document.getElementById('progressArea').style.display = 'none'; }, 800);
+    setTimeout(function() {
+      document.getElementById('progressArea').style.display = 'none';
+    }, 800);
   }
 
-  async function processFile() {
+  // ── Process file ────────────────────────────────────────────
+  function processFile() {
     if (!selectedFile) return;
     document.getElementById('processBtn').disabled = true;
     document.getElementById('results').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
 
-    const formData = new FormData();
+    var formData = new FormData();
     formData.append('file', selectedFile);
 
-    try {
-      const resp = await fetch('/process', { method: 'POST', body: formData });
+    fetch('/process', { method: 'POST', body: formData })
+      .then(function(resp) { return resp.text(); })
+      .then(function(rawText) {
+        var data;
+        try { data = JSON.parse(rawText); }
+        catch(e) {
+          stopProgress(false);
+          var hint = rawText.replace(/<[^>]+>/g,'').substring(0,200).trim();
+          showError('Server error: ' + hint);
+          document.getElementById('processBtn').disabled = false;
+          return;
+        }
 
-      // Safe JSON parse — handles cases where server returns HTML error page
-      let data;
-      const rawText = await resp.text();
-      try {
-        data = JSON.parse(rawText);
-      } catch (jsonErr) {
+        stopProgress(data.success);
+        if (!data.success) {
+          showError(data.error || 'Processing failed');
+          document.getElementById('processBtn').disabled = false;
+          return;
+        }
+
+        var stats = data.conversionStats || {};
+        var tex   = stats.tex     || {};
+        var alt   = stats.altText || {};
+        var allOK = (tex.errors||0) === 0 && (alt.errors||0) === 0;
+
+        document.getElementById('statusPill').innerHTML =
+          '<span class="status-pill ' + (allOK ? 'status-ok' : 'status-warn') + '">' +
+          (allOK ? '&#10003; All converted' : '&#9888; Issues found') + '</span>';
+
+        document.getElementById('statsGrid').innerHTML =
+          sc(stats.total||0,        'Total equations', '') +
+          sc(stats.withImgTag||0,   'IMG tags updated','ok') +
+          sc(tex.success||0,         'TeX success',     'ok') +
+          sc((tex.errors||0)+(tex.warnings||0), 'TeX issues', (tex.errors||0)>0?'fail':'warn') +
+          sc(alt.success||0,         'AltText success', 'ok') +
+          sc((alt.errors||0)+(alt.warnings||0), 'AltText issues', (alt.errors||0)>0?'fail':'warn');
+
+        var ct = data.content || {};
+        var cards = '';
+        if (ct.txt) cards += dlCard(ct.txt, ct.txtName||'equations.txt', 'txt', '&#128196;', 'equations.txt', 'TeX + AltText + MathML for every equation');
+        if (ct.xml) cards += dlCard(ct.xml, ct.xmlName||'modified.xml',  'xml', '&#128196;', 'modified.xml',  'XML with tex="" alttext="" on img tags');
+        if (ct.log) cards += dlCard(ct.log, ct.logName||'log.txt',       'log', '&#128196;', 'log.txt',       'Processing log with complexity analysis');
+
+        if (!cards) {
+          var dl = data.downloads || {};
+          if (dl.txt) cards += '<a class="dl-card" href="'+dl.txt+'" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          if (dl.xml) cards += '<a class="dl-card" href="'+dl.xml+'" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          if (dl.log) cards += '<a class="dl-card" href="'+dl.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+        }
+
+        document.getElementById('dlCards').innerHTML = cards;
+        document.getElementById('results').style.display = 'block';
+        document.getElementById('processBtn').disabled = false;
+      })
+      .catch(function(e) {
         stopProgress(false);
-        // Server returned non-JSON (HTML error page) — extract useful info
-        const match = rawText.match(/<pre>([\s\S]*?)<\/pre>/i) ||
-                      rawText.match(/Error[:\s]+([\s\S]{0,200})/i);
-        const hint = match ? match[1].substring(0, 200) : rawText.substring(0, 200);
-        showError('Server error: ' + hint.replace(/<[^>]+>/g, '').trim());
-        return;
-      }
-
-      stopProgress(data.success);
-
-      if (!data.success) { showError(data.error || 'Processing failed'); return; }
-
-      const stats = data.conversionStats || {};
-      const tex   = stats.tex     || {};
-      const alt   = stats.altText || {};
-      const allOK = (tex.errors || 0) === 0 && (alt.errors || 0) === 0;
-
-      document.getElementById('statusPill').innerHTML =
-        '<span class="status-pill ' + (allOK ? 'status-ok' : 'status-warn') + '">' +
-        (allOK ? '&#10003; All converted' : '&#9888; Issues found') + '</span>';
-
-      document.getElementById('statsGrid').innerHTML =
-        sc(stats.total || 0,       'Total equations', '') +
-        sc(stats.withImgTag || 0,  'IMG tags updated', 'ok') +
-        sc(tex.success || 0,        'TeX success', 'ok') +
-        sc((tex.errors||0)+(tex.warnings||0), 'TeX issues', (tex.errors||0)>0?'fail':'warn') +
-        sc(alt.success || 0,        'AltText success', 'ok') +
-        sc((alt.errors||0)+(alt.warnings||0), 'AltText issues', (alt.errors||0)>0?'fail':'warn');
-
-      const ct = data.content || {};
-      let cards = '';
-
-      function dlCard(text, filename, iconClass, icon, name, desc) {
-        if (!text) return '';
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url  = URL.createObjectURL(blob);
-        return '<a class="dl-card" href="' + url + '" download="' + filename + '">' +
-          '<div class="dl-card-icon ' + iconClass + '">' + icon + '</div>' +
-          '<div class="dl-card-body"><div class="dl-card-name">' + name + '</div><div class="dl-card-desc">' + desc + '</div></div>' +
-          '<div class="dl-card-arrow">&#8595;</div></a>';
-      }
-
-      if (ct.txt) cards += dlCard(ct.txt, ct.txtName||'equations.txt', 'txt', '&#128196;', 'equations.txt', 'TeX + AltText + MathML for every equation');
-      if (ct.xml) cards += dlCard(ct.xml, ct.xmlName||'modified.xml',  'xml', '&#128196;', 'modified.xml',  'XML with tex="" alttext="" written to img tags');
-      if (ct.log) cards += dlCard(ct.log, ct.logName||'log.txt',       'log', '&#128196;', 'log.txt',       'Processing log with complexity analysis');
-
-      if (!cards) {
-        const dl = data.downloads || {};
-        if (dl.txt) cards += '<a class="dl-card" href="' + dl.txt + '" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
-        if (dl.xml) cards += '<a class="dl-card" href="' + dl.xml + '" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
-        if (dl.log) cards += '<a class="dl-card" href="' + dl.log + '" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
-      }
-
-      document.getElementById('dlCards').innerHTML = cards;
-      document.getElementById('results').style.display = 'block';
-      document.getElementById('processBtn').disabled = false;
-
-    } catch (e) {
-      stopProgress(false);
-      showError('Network error: ' + e.message);
-      document.getElementById('processBtn').disabled = false;
-    }
+        showError('Network error: ' + e.message);
+        document.getElementById('processBtn').disabled = false;
+      });
   }
 
   function sc(num, label, cls) {
-    return '<div class="stat-card ' + cls + '"><div class="stat-num">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
+    return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
+  }
+
+  function dlCard(text, filename, iconClass, icon, name, desc) {
+    var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    var url  = URL.createObjectURL(blob);
+    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
+      '<div class="dl-card-icon '+iconClass+'">'+icon+'</div>' +
+      '<div class="dl-card-body"><div class="dl-card-name">'+name+'</div><div class="dl-card-desc">'+desc+'</div></div>' +
+      '<div class="dl-card-arrow">&#8595;</div></a>';
   }
 
   function showError(msg) {
-    const box = document.getElementById('errorBox');
-    box.textContent = '&#9888; ' + msg;
+    var box = document.getElementById('errorBox');
+    box.textContent = '\u26a0 ' + msg;
     box.style.display = 'block';
     document.getElementById('processBtn').disabled = false;
   }
