@@ -263,14 +263,19 @@ function analyzeMathMLComplexity(mathNode) {
 const CONFIG = {
     // Set to true to use WIRIS as primary TeX engine
     // Set to false to use mathml-to-latex only (offline mode)
-    WIRIS_ENABLED: true,
+    // On Render free tier, set to false to avoid timeouts
+    WIRIS_ENABLED: process.env.WIRIS_ENABLED !== "false",
 
     // WIRIS demo endpoint — free, no API key needed
-    // For production, replace with your licensed endpoint
     WIRIS_ENDPOINT: "https://www.wiris.net/demo/editor/mathml2latex",
 
-    // Timeout in milliseconds — if WIRIS takes longer, use fallback
-    WIRIS_TIMEOUT: 5000,
+    // Timeout per WIRIS call — keep short on cloud free tier
+    // Render free tier has 30s total request limit
+    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "3000"),
+
+    // Max equations to process with WIRIS — rest use fallback
+    // Prevents timeout on large files with many equations
+    WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "20"),
 
     // If true, log which engine was used for each equation
     LOG_ENGINE_USED: true
@@ -561,6 +566,15 @@ async function generateTeX(mathNode) {
             console.log(`  [TEX] mathml-to-latex (WIRIS disabled)`);
         return result;
     }
+
+    // ── WIRIS quota exceeded — use fallback for remaining ────────
+    if (generateTeX._wirisCount >= CONFIG.WIRIS_MAX_EQ) {
+        const result = generateTeXFallback(mathmlStr, mathNode);
+        if (CONFIG.LOG_ENGINE_USED)
+            console.log(`  [TEX] mathml-to-latex (WIRIS quota reached)`);
+        return result;
+    }
+    generateTeX._wirisCount = (generateTeX._wirisCount || 0) + 1;
 
     // ── Try WIRIS first ────────────────────────────────────────
     try {
@@ -1076,6 +1090,9 @@ function stripDOCTYPE(xml) {
 }
 
 async function processXML(rawXML, filename) {
+
+    // Reset WIRIS per-request counter
+    generateTeX._wirisCount = 0;
 
     // Pre-process XML — use shared stripDOCTYPE function
     let cleanXML = rawXML;
@@ -1969,6 +1986,18 @@ a:hover{text-decoration:underline}
           '<span class="status-pill ' + (allOK ? 'status-ok' : 'status-warn') + '">' +
           (allOK ? '&#10003; All converted' : '&#9888; Issues found') + '</span>';
 
+        // Handle zero equations separately
+        if (data.totalEquations === 0) {
+          document.getElementById('statsGrid').innerHTML = sc(0, 'Total equations', '');
+          var ct0 = data.content || {};
+          var c0 = ct0.log ? dlCard(ct0.log, ct0.logName||'log.txt', 'log', '&#128196;', 'log.txt', 'No equations found — see log for details') : '';
+          if (!c0) { var d0 = data.downloads||{}; if(d0.log) c0='<a class="dl-card" href="'+d0.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div><div class="dl-card-desc">No equations found</div></div><div class="dl-card-arrow">&#8595;</div></a>'; }
+          document.getElementById('dlCards').innerHTML = c0 || '<p style="color:var(--muted);font-size:13px;padding:8px 0">No equations found in this XML file.</p>';
+          document.getElementById('results').style.display = 'block';
+          document.getElementById('processBtn').disabled = false;
+          return;
+        }
+
         document.getElementById('statsGrid').innerHTML =
           sc(stats.total||0,        'Total equations', '') +
           sc(stats.withImgTag||0,   'IMG tags updated','ok') +
@@ -2033,6 +2062,21 @@ app.get("/health", (req, res) => {
 
 // ── POST /process — main endpoint ───────────────────────────────
 app.post("/process", upload.single("file"), async (req, res) => {
+  // ── Overall request timeout — Render free tier limit is 30s ────
+  // Send response after 25s if still processing to avoid Render
+  // returning its own HTML timeout page
+  const reqTimeout = setTimeout(() => {
+    if (!res.headersSent) {
+        console.error("[TIMEOUT] Request took too long — sending partial response");
+        res.setHeader("Content-Type", "application/json");
+        res.status(503).json({
+            success: false,
+            error:   "Processing timeout — the XML file has too many equations for the free tier. Try disabling WIRIS (set WIRIS_ENABLED=false in Render environment variables) for faster processing.",
+            hint:    "Go to Render dashboard → Environment → Add WIRIS_ENABLED = false"
+        });
+    }
+  }, 25000);
+
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
@@ -2183,9 +2227,11 @@ app.post("/process", upload.single("file"), async (req, res) => {
         }
     };
 
+    clearTimeout(reqTimeout);
     res.json(response);
 
   } catch (topLevelErr) {
+    clearTimeout(reqTimeout);
     // Catch-all — should never reach here, but ensures JSON response
     console.error("[ERROR] Unhandled error in /process route:", topLevelErr.message);
     console.error(topLevelErr.stack);
