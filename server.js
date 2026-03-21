@@ -30,6 +30,9 @@ process.on("unhandledRejection", (reason, promise) => {
     // Don't exit — keep server running
 });
 
+// Increase express body size limit for large XML files
+app.use(require("express").raw({ limit: "20mb" }));
+
 // Enable CORS — allows browser clients and external services to call the API
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin",  "*");
@@ -77,14 +80,13 @@ setInterval(cleanOldOutputFiles, 30 * 60 * 1000);
 // Is running on cloud (not localhost)
 // IS_CLOUD defined in CONFIG section below
 
-// Multer — accept only XML files
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, UPLOAD),
-    filename:    (req, file, cb) => cb(null, Date.now() + "_" + file.originalname)
-});
+// Multer — use memory storage on cloud (avoids disk issues on Render)
+// Use disk storage locally for large file support
+const storage = multer.memoryStorage();
 
 const upload = multer({
     storage,
+    limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
     fileFilter: (req, file, cb) => {
         if (file.originalname.toLowerCase().endsWith(".xml")) cb(null, true);
         else cb(new Error("Only .xml files are accepted"));
@@ -2108,21 +2110,21 @@ app.post("/process", upload.single("file"), async (req, res) => {
         return res.status(400).json({ error: "No file uploaded. Send XML file as multipart field named 'file'" });
     }
 
-    const uploadedPath = req.file.path;
-    const origName     = req.file.originalname;
-    const baseName     = path.basename(origName, ".xml");
-    const timestamp    = Date.now();
+    const origName  = req.file.originalname;
+    const baseName  = path.basename(origName, ".xml");
+    const timestamp = Date.now();
 
+    // Read from memory buffer (memoryStorage) — no disk read needed
     let rawXML;
     try {
-        rawXML = fs.readFileSync(uploadedPath, "utf8");
+        rawXML = req.file.buffer
+            ? req.file.buffer.toString("utf8")
+            : fs.readFileSync(req.file.path, "utf8");
     } catch (e) {
         return res.status(500).json({ error: `Cannot read uploaded file: ${e.message}` });
     }
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
-    // Uses a step-by-step string approach to handle complex internal subsets
-    // e.g. <!DOCTYPE chapter PUBLIC "..." "book.dtd" [<!ENTITY ...>]>
     let cleanedXML = rawXML;
     try {
         cleanedXML = stripDOCTYPE(rawXML);
@@ -2193,8 +2195,10 @@ app.post("/process", upload.single("file"), async (req, res) => {
         console.error(`[ERROR] Cannot save LOG: ${e.message}`);
     }
 
-    // Clean up upload
-    try { fs.unlinkSync(uploadedPath); } catch (_) {}
+    // Clean up upload file if it was saved to disk
+    if (req.file && req.file.path) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+    }
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
