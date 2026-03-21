@@ -1284,6 +1284,8 @@ async function processXML(rawXML, filename) {
 app.get("/", (req, res) => {
     res.json({
         name:    "MathMLtoTeXandAltText API",
+        author:  "Ambeth",
+        github:  "https://github.com/Ambethmani/MathMLtoTeXandAltText",
         version: "1.0.0",
         endpoints: {
             "POST /process": {
@@ -1313,7 +1315,7 @@ app.get("/ui", (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MathMLtoTeXandAltText</title>
+<title>MathMLtoTeXandAltText — by Ambeth</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Segoe UI, Arial, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -1357,8 +1359,16 @@ app.get("/ui", (req, res) => {
 </head>
 <body>
 <div class="card">
-  <h1>MathMLtoTeXandAltText</h1>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+    <h1>MathMLtoTeXandAltText</h1>
+    <span style="background:#1a1a2e;color:white;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600;">v1.0</span>
+  </div>
   <p class="sub">Upload an XML file to extract TeX, AltText and update img tags</p>
+  <div style="background:#f0f7ff;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;margin-bottom:20px;font-size:12px;color:#444;">
+    <strong>Developed by:</strong> Ambeth &nbsp;|&nbsp;
+    <strong>Engine:</strong> WIRIS + mathml-to-latex &nbsp;|&nbsp;
+    <strong>GitHub:</strong> <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:#4a90d9;">Ambeth/MathMLtoTeXandAltText</a>
+  </div>
 
   <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
     <div class="icon">📄</div>
@@ -1369,6 +1379,11 @@ app.get("/ui", (req, res) => {
   <div id="fileName">No file selected</div>
 
   <button class="btn" id="processBtn" onclick="processFile()" disabled>Process File</button>
+  <div style="text-align:center;margin-top:20px;font-size:11px;color:#aaa;">
+    Built by <strong style="color:#666;">Ambeth</strong> &nbsp;·&nbsp;
+    Powered by WIRIS + mathml-to-latex &nbsp;·&nbsp;
+    <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:#4a90d9;">GitHub</a>
+  </div>
 
   <div class="progress" id="progress">
     <span class="spinner"></span> Processing equations...
@@ -1702,6 +1717,8 @@ function startServer(port, retriesLeft) {
         const actualPort = server.address().port;
         console.log("\n" + "=".repeat(60));
         console.log("  MathMLtoTeXandAltText API");
+        console.log("  Developed by : Ambeth");
+        console.log("  GitHub       : https://github.com/Ambethmani/MathMLtoTeXandAltText");
         console.log("=".repeat(60));
         console.log("  Running  : http://localhost:" + actualPort);
         console.log("  Endpoint : POST http://localhost:" + actualPort + "/process");
