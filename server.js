@@ -4,7 +4,18 @@
 const fs      = require("fs");
 const path    = require("path");
 const http    = require("http");
-const { JSDOM } = require("jsdom");
+const { JSDOM, ResourceLoader } = require("jsdom");
+
+// Block all external resource loading — prevents JSDOM from fetching
+// external DTDs (e.g. art570.dtd) which hangs on cloud deployments
+class BlockingResourceLoader extends ResourceLoader {
+    fetch(url, options) {
+        // Return empty buffer for all external resources — never make network calls
+        console.log(`  [JSDOM] Blocked external resource: ${url}`);
+        return Promise.resolve(Buffer.from(""));
+    }
+}
+const BLOCKED_RESOURCES = new BlockingResourceLoader();
 const { MathMLToLaTeX } = require("mathml-to-latex");
 const multer  = require("multer");
 const express = require("express");
@@ -1088,6 +1099,17 @@ function stripDOCTYPE(xml) {
     // Step 5: Normalize line endings
     result = result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
+    // Step 6: Replace NDATA entity references with empty string
+    // Elsevier uses entities like &gr1; &gr2; that reference binary image data
+    // JSDOM will try to resolve these — replace them before parsing
+    // Only strip entities that are NOT standard XML entities
+    const STD_ENTITIES = new Set(["amp", "lt", "gt", "quot", "apos"]);
+    result = result.replace(/&([a-zA-Z][a-zA-Z0-9_.-]*);/g, (match, name) => {
+        if (STD_ENTITIES.has(name)) return match; // keep standard entities
+        // Replace unknown entities with empty string to prevent JSDOM errors
+        return "";
+    });
+
     return result.trim();
 }
 
@@ -1213,7 +1235,10 @@ async function processXML(rawXML, filename) {
 
     // Strategy 1: strict XML parser (best — preserves namespaces)
     try {
-        dom      = new JSDOM(cleanXML, { contentType: "application/xml" });
+        dom      = new JSDOM(cleanXML, {
+            contentType: "application/xml",
+            resources:   BLOCKED_RESOURCES    // block DTD/entity network calls
+        });
         document = dom.window.document;
         if (document.querySelector("parsererror")) {
             const errText = document.querySelector("parsererror").textContent.substring(0, 120);
@@ -1225,7 +1250,10 @@ async function processXML(rawXML, filename) {
         console.log("  [INFO] Trying HTML parser...");
         // Strategy 2: HTML parser — more lenient, handles broken XML
         try {
-            dom      = new JSDOM(cleanXML, { contentType: "text/html" });
+            dom      = new JSDOM(cleanXML, {
+                contentType: "text/html",
+                resources:   BLOCKED_RESOURCES
+            });
             document = dom.window.document;
             console.log("  [INFO] HTML parser succeeded");
         } catch (e2) {
