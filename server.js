@@ -1712,6 +1712,14 @@ a:hover{text-decoration:underline}
 </head>
 <body>
 
+<div id="dragOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(79,142,247,0.15);border:3px dashed var(--blue);z-index:9999;pointer-events:none;align-items:center;justify-content:center;flex-direction:column;gap:12px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 40px;text-align:center">
+    <div style="font-size:40px;margin-bottom:8px">&#128196;</div>
+    <div style="font-size:16px;font-weight:600;color:var(--text)">Drop XML file here</div>
+    <div style="font-size:13px;color:var(--muted);margin-top:4px">Release to upload</div>
+  </div>
+</div>
+
 <nav class="nav">
   <div class="nav-logo">
     <div class="nav-logo-icon">M</div>
@@ -1835,12 +1843,41 @@ a:hover{text-decoration:underline}
   const fileInput = document.getElementById('fileInput');
   let selectedFile = null;
 
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  // ── Prevent browser from opening XML files dropped anywhere on page ──
+  const overlay = document.getElementById('dragOverlay');
+  let dragCounter = 0;
+
+  document.addEventListener('dragenter', e => {
+    e.preventDefault();
+    dragCounter++;
+    if (overlay) overlay.style.display = 'flex';
+  });
+  document.addEventListener('dragleave', e => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) { dragCounter = 0; if (overlay) overlay.style.display = 'none'; }
+  });
+  document.addEventListener('dragover', e => { e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    dragCounter = 0;
+    if (overlay) overlay.style.display = 'none';
+    dropZone.classList.remove('dragover');
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && f.name.toLowerCase().endsWith('.xml')) {
+      setFile(f);
+    } else if (f) {
+      showError('Please drop an .xml file.');
+    }
+  });
+
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', e => { e.stopPropagation(); dropZone.classList.remove('dragover'); });
   dropZone.addEventListener('drop', e => {
-    e.preventDefault(); dropZone.classList.remove('dragover');
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.remove('dragover');
     const f = e.dataTransfer.files[0];
-    if (f && f.name.endsWith('.xml')) setFile(f);
+    if (f && f.name.toLowerCase().endsWith('.xml')) setFile(f);
     else showError('Please drop an .xml file.');
   });
   fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
