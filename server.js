@@ -728,8 +728,47 @@ function generateAltText(mathNode) {
 function buildLog(equations, filename, timestamp) {
     const SEP  = "=".repeat(72);
     const DIV  = "-".repeat(72);
-    const SUB  = "~".repeat(72);
     const now  = new Date().toLocaleString();
+
+    // ── SPECIAL CASE: No equations found ─────────────────────────
+    if (!equations || equations.length === 0) {
+        return [
+            SEP,
+            "  MathMLtoTeXandAltText — Processing Log",
+            SEP,
+            `  Input File : ${filename}`,
+            `  Processed  : ${now}`,
+            SEP,
+            "",
+            "  RESULT : NO EQUATIONS FOUND",
+            DIV,
+            "",
+            "  No equations were found in this XML file.",
+            "",
+            "  The processor searched for equations in the following formats:",
+            "    - JATS/NLM : <inline-formula>, <disp-formula>",
+            "    - Springer : <InlineEquation>, <Equation>",
+            "    - HTML span: <span class=\"inline|display\" type=\"eqn\">",
+            "    - Bare math: <math>, <mml:math> (any location)",
+            "",
+            "  Possible reasons:",
+            "    1. This XML file contains no mathematical equations",
+            "    2. Equations use a different format not yet supported",
+            "    3. MathML elements are nested inside unsupported wrapper tags",
+            "",
+            "  No output files were modified.",
+            "",
+            DIV,
+            "",
+            SEP,
+            `  End of Log — ${filename}`,
+            SEP
+        ].join("\n");
+    }
+
+    // ── NORMAL CASE: Equations found — continue below ─────────────
+    const SUB  = "~".repeat(72);
+    // now already declared above
 
     // ── Count statuses ────────────────────────────────────────────
     const total       = equations.length;
@@ -1047,38 +1086,47 @@ async function processXML(rawXML, filename) {
     };
 
     function injectNamespaces(xml) {
-        // Find the root element opening tag
         const rootMatch = xml.match(/<([a-zA-Z][a-zA-Z0-9_:-]*)(\s[^>]*)?>/);
         if (!rootMatch) return xml;
 
-        const fullTag    = rootMatch[0];
-        const tagName    = rootMatch[1];
+        const fullTag       = rootMatch[0];
+        const tagName       = rootMatch[1];
         const existingAttrs = rootMatch[2] || "";
 
-        // Detect which namespace prefixes are actually used in the document
+        // Detect ALL namespace prefixes — both element and attribute level
         const usedPrefixes = new Set();
-        const prefixRe = /<([a-zA-Z][a-zA-Z0-9]*):([a-zA-Z])/g;
+
+        // Element prefixes: <prefix:tag
         let m;
-        while ((m = prefixRe.exec(xml)) !== null) {
-            usedPrefixes.add(m[1]);
+        const elemRe = /<([a-zA-Z][a-zA-Z0-9_]*):[a-zA-Z]/g;
+        while ((m = elemRe.exec(xml)) !== null) usedPrefixes.add(m[1]);
+
+        // Attribute prefixes: prefix:attr= (e.g. xlink:href=)
+        const attrRe = /\b([a-zA-Z][a-zA-Z0-9_]*):[a-zA-Z][a-zA-Z0-9_]*\s*=/g;
+        while ((m = attrRe.exec(xml)) !== null) {
+            if (m[1] !== "xmlns") usedPrefixes.add(m[1]);
         }
 
-        // Build missing namespace declarations
+        console.log("  [INFO] Detected prefixes: " + [...usedPrefixes].join(", "));
+
+        // Build missing xmlns declarations
         let extraNS = "";
         for (const [prefix, uri] of Object.entries(KNOWN_NAMESPACES)) {
-            if (usedPrefixes.has(prefix) && !existingAttrs.includes(`xmlns:${prefix}`)) {
-                extraNS += ` xmlns:${prefix}="${uri}"`;
+            if (usedPrefixes.has(prefix) && !existingAttrs.includes("xmlns:" + prefix)) {
+                extraNS += " xmlns:" + prefix + '="' + uri + '"';
             }
         }
 
-        if (!extraNS) return xml; // nothing to inject
-
-        // Also ensure root has xmlns if missing
-        if (!existingAttrs.includes("xmlns=") && !tagName.includes(":")) {
-            extraNS += ` xmlns="http://www.elsevier.com/xml/bk/dtd"`;
+        // Any unrecognised prefix — add placeholder so parser doesn't fail
+        for (const prefix of usedPrefixes) {
+            if (!KNOWN_NAMESPACES[prefix] && prefix !== "xml" && !existingAttrs.includes("xmlns:" + prefix)) {
+                extraNS += " xmlns:" + prefix + '="urn:unknown:' + prefix + '"';
+                console.log("  [WARN] Added placeholder for unknown prefix: " + prefix);
+            }
         }
 
-        const newTag = `<${tagName}${existingAttrs}${extraNS}>`;
+        if (!extraNS) return xml;
+        const newTag = "<" + tagName + existingAttrs + extraNS + ">";
         return xml.replace(fullTag, newTag);
     }
 
@@ -1114,7 +1162,16 @@ async function processXML(rawXML, filename) {
 
     // ── Helper: process one formula element ──────────────────────
     async function processFormula(eq, type, format, idFallback) {
-        const math = eq.querySelector("math") || eq.querySelector("*|math");
+        // Use getElementsByTagName to find math — handles mml:math, math, etc.
+        // querySelector("*|math") is invalid in JSDOM
+        const math =
+            eq.querySelector("math") ||
+            [...eq.getElementsByTagName("math")][0] ||
+            [...eq.getElementsByTagName("mml:math")][0] ||
+            [...eq.getElementsByTagName("*")].find(el =>
+                el.tagName.toLowerCase() === "math" ||
+                el.tagName.toLowerCase() === "mml:math"
+            );
         if (!math) return;
 
         const id     = eq.getAttribute("id") || eq.getAttribute("ID") || idFallback;
@@ -1135,34 +1192,56 @@ async function processXML(rawXML, filename) {
             eq.querySelector("img.inlinegraphic")          ||
             eq.querySelector("img");
 
-        if (imgEl) {
-            // Clean up stale error values from previous runs
-            const existingTex2 = imgEl.getAttribute("tex") || "";
-            const hasStaleError2 = ["error converting","error processing","invalid mathml"]
-                .some(e => existingTex2.toLowerCase().includes(e));
-            if (hasStaleError2) imgEl.removeAttribute("tex");
-
-            // Only write if conversion succeeded
-            if (tex && texRes.status === "OK") {
-                imgEl.setAttribute("tex", tex);
-                xmlModified = true;
+        // ── Stale error cleanup helper ────────────────────────────
+        function cleanAndWrite(el, texVal, altVal, texOK, altOK) {
+            const existingTex = el.getAttribute("tex") || "";
+            const staleErrors = ["error converting","error processing","invalid mathml"];
+            if (staleErrors.some(e => existingTex.toLowerCase().includes(e))) {
+                el.removeAttribute("tex");
+            }
+            if (texVal && texOK) {
+                el.setAttribute("tex", texVal);
             } else {
-                imgEl.removeAttribute("tex");
-                xmlModified = true;
+                el.removeAttribute("tex");
             }
-            if (alt && altRes.status === "OK") {
-                imgEl.setAttribute("alttext", alt);
+            if (altVal && altOK) {
+                el.setAttribute("alttext", altVal);
             }
-            console.log(`  [${texRes.status === "OK" ? "OK" : "WARN"}] img updated — ${type} ID:${id} | engine: ${texRes.engine || "mathml-to-latex"}`);
+            xmlModified = true;
+        }
+
+        const texOK = tex && texRes.status === "OK";
+        const altOK = alt && altRes.status === "OK";
+
+        if (imgEl) {
+            // ── CASE 1: graphic/img tag found — write to it ───────
+            cleanAndWrite(imgEl, tex, alt, texOK, altOK);
+            console.log(`  [${texRes.status === "OK" ? "OK" : "WARN"}] img tag updated — ${type} ID:${id} | engine: ${texRes.engine || "mathml-to-latex"}`);
+
+        } else if (math.hasAttribute("altimg")) {
+            // ── CASE 2: no graphic tag — write tex/alttext onto
+            //    the <math> or <mml:math> element itself if it
+            //    has an altimg attribute
+            //    e.g. <mml:math altimg="si0001.svg" tex="" alttext="">
+            cleanAndWrite(math, tex, alt, texOK, altOK);
+            console.log(`  [${texRes.status === "OK" ? "OK" : "WARN"}] math[@altimg] updated — ${type} ID:${id} | engine: ${texRes.engine || "mathml-to-latex"}`);
+
+        } else {
+            // ── CASE 3: no graphic, no altimg — TXT output only ──
+            console.log(`  [INFO] No img tag or altimg — TXT output only — ${type} ID:${id}`);
         }
 
         // Always run complexity analysis — store it for log reporting
         const complexity = analyzeMathMLComplexity(math);
 
+        // hasImg is true for both graphic tags AND math[@altimg]
+        const hasTarget = !!imgEl || math.hasAttribute("altimg");
+
         equations.push({
             type, format, id, tex, alt,
             mathml:        math.outerHTML,
-            hasImg:        !!imgEl,
+            hasImg:        hasTarget,
+            writeTarget:   imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
             texStatus:     texRes.status,
             texReason:     texRes.reason,
             texComplexity: texRes.complexity || complexity,
@@ -1178,13 +1257,8 @@ async function processXML(rawXML, filename) {
 
     // ── FORMAT 1: JATS inline-formula ────────────────────────────
     // Handles both plain <inline-formula> and namespace-prefixed versions
-    // querySelectorAll does not support namespace prefixes — use tagName filter
-    const allInlineFormulas = [...document.querySelectorAll(
-        "inline-formula, ce\\:inline-formula"
-    )].filter(el =>
-        el.tagName.toLowerCase().includes("inline-formula")
-    );
-    // Also catch via tagName for namespace-prefixed elements
+    // Use getElementsByTagName — works with namespaced elements
+    // querySelectorAll with namespace prefixes is invalid in JSDOM
     const allEls = [...document.getElementsByTagName("*")];
     const inlineFormulas = allEls.filter(el =>
         el.tagName.toLowerCase() === "inline-formula" ||
@@ -1205,8 +1279,11 @@ async function processXML(rawXML, filename) {
 
     // ── FORMAT 2: Springer ────────────────────────────────────────
     for (const [i, eq] of [...document.querySelectorAll("InlineEquation, Equation")].entries()) {
-        const math = eq.querySelector("math") || eq.querySelector("*|math");
-        if (!math) return;
+        const math =
+            eq.querySelector("math") ||
+            [...eq.getElementsByTagName("math")][0] ||
+            [...eq.getElementsByTagName("mml:math")][0];
+        if (!math) continue;
         let label = "";
         if (eq.tagName === "InlineEquation") {
             label = eq.getAttribute("ID") || `inline-${i+1}`;
@@ -1226,16 +1303,27 @@ async function processXML(rawXML, filename) {
             texVal = texRes.value; texStatus = texRes.status; texReason = texRes.reason;
         }
         const altRes = generateAltText(math);
+        const eqEls2 = [...eq.getElementsByTagName("*")];
         const imgEl  =
-            eq.querySelector("inline-graphic")   ||
-            eq.querySelector("graphic")           ||
-            eq.querySelector("span.eqnimg img")   ||
-            eq.querySelector("img.inlinegraphic") ||
+            eq.querySelector("inline-graphic")                                     ||
+            eq.querySelector("graphic")                                             ||
+            eqEls2.find(el => el.tagName.toLowerCase() === "ce:inline-graphic")   ||
+            eqEls2.find(el => el.tagName.toLowerCase() === "ce:graphic")           ||
+            eq.querySelector("span.eqnimg img")                                    ||
+            eq.querySelector("img.inlinegraphic")                                  ||
             eq.querySelector("img");
+
         if (imgEl) {
-            if (texVal && texStatus === "OK")        imgEl.setAttribute("tex",     texVal);
+            // CASE 1: graphic tag found
+            if (texVal && texStatus === "OK")           imgEl.setAttribute("tex",     texVal);
             if (altRes.value && altRes.status === "OK") imgEl.setAttribute("alttext", altRes.value);
             xmlModified = true;
+        } else if (math && math.hasAttribute("altimg")) {
+            // CASE 2: no graphic — write onto math[@altimg]
+            if (texVal && texStatus === "OK")           math.setAttribute("tex",     texVal);
+            if (altRes.value && altRes.status === "OK") math.setAttribute("alttext", altRes.value);
+            xmlModified = true;
+            console.log("  [INFO] Springer math[@altimg] updated — ID:" + label);
         }
         equations.push({
             type:      eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
@@ -1259,7 +1347,10 @@ async function processXML(rawXML, filename) {
     for (const [i, eq] of [...document.querySelectorAll("span.inline[type='eqn'], span.display[type='eqn']")].entries()) {
 
         // Find math — may be direct child OR inside span.mathml wrapper
-        const math = eq.querySelector("math");
+        const math =
+            eq.querySelector("math") ||
+            [...eq.getElementsByTagName("math")][0] ||
+            [...eq.getElementsByTagName("mml:math")][0];
         if (!math) continue;
 
         const texRes2 = await generateTeX(math);
@@ -1283,46 +1374,32 @@ async function processXML(rawXML, filename) {
             eq.querySelector(".displaygraphic")           ||
             eq.querySelector("img");
 
+        const eqId   = eq.getAttribute("data-id") || eq.getAttribute("id") || "?";
+        const texOK2 = texRes2.value && texRes2.status === "OK";
+        const altOK2 = altRes2.value && altRes2.status === "OK";
+        const STALE  = ["error converting from mathml to latex","error converting",
+                        "error processing","invalid mathml","cannot convert"];
+
+        function cleanWrite2(el, tv, av, tok, aok) {
+            const ex = el.getAttribute("tex") || "";
+            if (STALE.some(e => ex.toLowerCase().includes(e))) el.removeAttribute("tex");
+            if (tv && tok) { el.setAttribute("tex", tv); } else { el.removeAttribute("tex"); }
+            if (av && aok) { el.setAttribute("alttext", av); }
+            xmlModified = true;
+        }
+
         if (imgEl) {
-            // Clean up any stale/error values written by previous runs
-            const existingTex = imgEl.getAttribute("tex") || "";
-            const WIRIS_ERROR_STRINGS = [
-                "error converting from mathml to latex",
-                "error converting",
-                "error processing",
-                "invalid mathml",
-                "cannot convert"
-            ];
-            const hasStaleError = WIRIS_ERROR_STRINGS.some(e =>
-                existingTex.toLowerCase().includes(e)
-            );
-            if (hasStaleError) {
-                imgEl.removeAttribute("tex");
-                console.log(`  [CLEAN] Removed stale error tex from img ID:${imgEl.getAttribute("id") || "?"}`);
-            }
+            // CASE 1: graphic/img tag found
+            cleanWrite2(imgEl, texRes2.value, altRes2.value, texOK2, altOK2);
+            console.log(`  [${texRes2.status === "OK" ? "OK" : "WARN"}] img updated — HTML ID:${eqId}`);
 
-            // Only write if conversion succeeded — never write error strings
-            if (texRes2.value && texRes2.status === "OK") {
-                imgEl.setAttribute("tex", texRes2.value);
-                xmlModified = true;
-            } else if (!texRes2.value || texRes2.status !== "OK") {
-                // Conversion failed — remove any existing tex attribute
-                // so it doesn't contain a stale error value
-                imgEl.removeAttribute("tex");
-                xmlModified = true;
-                console.log(`  [WARN] TeX conversion failed for img ID:${imgEl.getAttribute("id") || "?"} — tex attribute removed`);
-            }
+        } else if (math && math.hasAttribute("altimg")) {
+            // CASE 2: no graphic — write onto math[@altimg]
+            cleanWrite2(math, texRes2.value, altRes2.value, texOK2, altOK2);
+            console.log(`  [${texRes2.status === "OK" ? "OK" : "WARN"}] math[@altimg] updated — HTML ID:${eqId}`);
 
-            if (altRes2.value && altRes2.status === "OK") {
-                imgEl.setAttribute("alttext", altRes2.value);
-            }
-
-            const eqId = eq.getAttribute("data-id") || eq.getAttribute("id") || "?";
-            if (texRes2.status === "OK") {
-                console.log(`  [OK] img updated — HTML ID:${eqId} | tex: ${texRes2.value.substring(0,50)}${texRes2.value.length>50?"...":""}`);
-            } else {
-                console.log(`  [WARN] img tex failed — HTML ID:${eqId} | engine: ${texRes2.engine} | reason: ${texRes2.reason}`);
-            }
+        } else {
+            console.log(`  [INFO] No img/altimg found — TXT only — HTML ID:${eqId}`);
         }
 
         equations.push({
@@ -1343,19 +1420,40 @@ async function processXML(rawXML, filename) {
 
     // ── FORMAT 4: Bare math fallback ──────────────────────────────
     if (equations.length === 0) {
-        for (const [i, math] of [...document.querySelectorAll("math")].entries()) {
+        // Find all math elements — plain math and mml:math namespace
+        const allMathEls = [
+            ...document.getElementsByTagName("math"),
+            ...document.getElementsByTagName("mml:math")
+        ].filter((el, idx, arr) => arr.indexOf(el) === idx); // deduplicate
+
+        for (const [i, math] of allMathEls.entries()) {
             const texRes3 = await generateTeX(math);
             const altRes3 = generateAltText(math);
+            // For bare math — write tex/alttext onto math[@altimg] if present
+            const hasAltImg3 = math.hasAttribute("altimg");
+            if (hasAltImg3 && texRes3.value && texRes3.status === "OK") {
+                math.setAttribute("tex", texRes3.value);
+                xmlModified = true;
+            }
+            if (hasAltImg3 && altRes3.value && altRes3.status === "OK") {
+                math.setAttribute("alttext", altRes3.value);
+                xmlModified = true;
+            }
+            if (hasAltImg3) {
+                console.log(`  [INFO] bare math[@altimg] updated — eq-${i+1}`);
+            }
+
             equations.push({
-                type:      math.getAttribute("display") === "block" ? "Display Equation" : "Inline Equation",
-                format:    "bare",
-                id:        math.getAttribute("id") || `eq-${i+1}`,
-                tex:       texRes3.value,
-                alt:       altRes3.value,
-                mathml:    math.outerHTML,
-                hasImg:    false,
-                texStatus: texRes3.status, texReason: texRes3.reason,
-                altStatus: altRes3.status, altReason: altRes3.reason
+                type:        math.getAttribute("display") === "block" ? "Display Equation" : "Inline Equation",
+                format:      "bare",
+                id:          math.getAttribute("id") || `eq-${i+1}`,
+                tex:         texRes3.value,
+                alt:         altRes3.value,
+                mathml:      math.outerHTML,
+                hasImg:      hasAltImg3,
+                writeTarget: hasAltImg3 ? "math[@altimg]" : "none",
+                texStatus:   texRes3.status, texReason: texRes3.reason,
+                altStatus:   altRes3.status, altReason: altRes3.reason
             });
         }
     }
@@ -1363,9 +1461,9 @@ async function processXML(rawXML, filename) {
     // ── Build TXT content ─────────────────────────────────────────
     const SEP = "=".repeat(64);
     const DIV = "-".repeat(64);
-    const wirisUsed  = equations.filter(e => e.engine && e.engine.includes("WIRIS")).length;
+    const wirisUsed    = equations.filter(e => e.engine && e.engine.includes("WIRIS")).length;
     const fallbackUsed = equations.filter(e => e.engine && e.engine.includes("fallback")).length;
-    const texEngine  = CONFIG.WIRIS_ENABLED
+    const texEngine    = CONFIG.WIRIS_ENABLED
         ? `WIRIS/MathType API (primary) + mathml-to-latex (fallback) — WIRIS: ${wirisUsed}, Fallback: ${fallbackUsed}`
         : "mathml-to-latex (WIRIS disabled)";
 
@@ -1379,6 +1477,17 @@ async function processXML(rawXML, filename) {
         `  Alt via : Comprehensive recursive walker`,
         SEP, ""
     ];
+
+    if (equations.length === 0) {
+        txtLines.push("  No equations found in this XML file.");
+        txtLines.push("");
+        txtLines.push("  Searched for: <inline-formula>, <disp-formula>, <InlineEquation>,");
+        txtLines.push("                <Equation>, <span type=\"eqn\">, <math>, <mml:math>");
+        txtLines.push("");
+        txtLines.push(SEP);
+        txtLines.push("  End of Output");
+        txtLines.push(SEP);
+    }
 
     equations.forEach((eq, i) => {
         txtLines.push(DIV);
@@ -1414,7 +1523,11 @@ async function processXML(rawXML, filename) {
         }
     }
 
-    console.log(`[INFO] Processing complete — equations: ${equations.length}, xmlModified: ${xmlModified}, hasImgCount: ${equations.filter(e=>e.hasImg).length}`);
+    if (equations.length === 0) {
+        console.log(`[INFO] No equations found in: ${filename}`);
+    } else {
+        console.log(`[INFO] Processing complete — equations: ${equations.length}, xmlModified: ${xmlModified}, hasImgCount: ${equations.filter(e=>e.hasImg).length}`);
+    }
 
     // ── Build log content ────────────────────────────────────────
     const logContent = buildLog(equations, filename, Date.now());
@@ -1964,9 +2077,11 @@ app.post("/process", upload.single("file"), async (req, res) => {
         filename:        origName,
         totalEquations:  result.equations.length,
         xmlModified:     result.xmlModified,
-        message:         result.xmlModified
-                            ? "TeX and AltText added to img tags in XML. Both TXT and XML returned."
-                            : "No img tags found in equation elements. TXT file only returned.",
+        message:         result.equations.length === 0
+                            ? "No equations found in this XML file. Log file generated."
+                            : result.xmlModified
+                                ? "TeX and AltText added to img tags. TXT, XML and LOG returned."
+                                : "No img/graphic tags found. TXT and LOG returned.",
         downloads: {
             txt: `${baseURL}/download/${txtFilename}`,
             log: `${baseURL}/download/${logFilename}`
