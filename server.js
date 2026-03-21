@@ -38,6 +38,11 @@ app.use((req, res, next) => {
     if (req.method === "OPTIONS") return res.sendStatus(200);
     next();
 });
+
+// Express body parsers with large limits
+// These only apply to JSON/urlencoded — multer handles multipart separately
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 const UPLOAD = path.join(__dirname, "uploads");
 const OUTPUT = path.join(__dirname, "outputs");
 
@@ -77,9 +82,12 @@ setInterval(cleanOldOutputFiles, 30 * 60 * 1000);
 // Is running on cloud (not localhost)
 // IS_CLOUD defined in CONFIG section below
 
-// Multer — use memory storage on cloud (avoids disk issues on Render)
-// Use disk storage locally for large file support
-const storage = multer.memoryStorage();
+// Multer — disk storage (streams upload, avoids Render proxy body size limits)
+// Memory storage causes issues on Render free tier with larger files
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOAD),
+    filename:    (req, file, cb) => cb(null, Date.now() + "_" + file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_"))
+});
 
 const upload = multer({
     storage,
@@ -1140,12 +1148,18 @@ async function processXML(rawXML, filename) {
         "xlink": "http://www.w3.org/1999/xlink",
         "xl":    "http://www.w3.org/1999/xlink",
         "aid":   "http://ns.adobe.com/AdobeInDesign/4.0/",
+        "sa":    "http://www.elsevier.com/xml/common/struct-aff/dtd",
         "sb":    "http://www.elsevier.com/xml/common/struct-bib/dtd",
         "ja":    "http://www.elsevier.com/xml/ja/dtd",
         "bk":    "http://www.elsevier.com/xml/bk/dtd",
         "cals":  "http://www.oasis-open.org/specs/tm9502.html",
         "oasis": "http://docs.oasis-open.org/ns/oasis-exchange/table",
-        "xs":    "http://www.w3.org/2001/XMLSchema"
+        "xs":    "http://www.w3.org/2001/XMLSchema",
+        "rdf":   "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "dc":    "http://purl.org/dc/elements/1.1/",
+        "prism": "http://prismstandard.org/namespaces/basic/2.0/",
+        "ait":   "http://www.elsevier.com/2001/XMLSchema",
+        "xsi":   "http://www.w3.org/2001/XMLSchema-instance"
     };
 
     function injectNamespaces(xml) {
@@ -2111,12 +2125,10 @@ app.post("/process", upload.single("file"), async (req, res) => {
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
 
-    // Read from memory buffer (memoryStorage) — no disk read needed
+    // Read from disk (disk storage streams the upload — no body size limit issues)
     let rawXML;
     try {
-        rawXML = req.file.buffer
-            ? req.file.buffer.toString("utf8")
-            : fs.readFileSync(req.file.path, "utf8");
+        rawXML = fs.readFileSync(req.file.path, "utf8");
     } catch (e) {
         return res.status(500).json({ error: `Cannot read uploaded file: ${e.message}` });
     }
@@ -2192,10 +2204,8 @@ app.post("/process", upload.single("file"), async (req, res) => {
         console.error(`[ERROR] Cannot save LOG: ${e.message}`);
     }
 
-    // Clean up upload file if it was saved to disk
-    if (req.file && req.file.path) {
-        try { fs.unlinkSync(req.file.path); } catch (_) {}
-    }
+    // Clean up upload file from disk
+    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
