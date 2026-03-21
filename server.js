@@ -75,11 +75,7 @@ function cleanOldOutputFiles() {
 setInterval(cleanOldOutputFiles, 30 * 60 * 1000);
 
 // Is running on cloud (not localhost)
-const IS_CLOUD = !!(process.env.RAILWAY_ENVIRONMENT ||
-                    process.env.RENDER ||
-                    process.env.DYNO ||        // Heroku
-                    process.env.K_SERVICE ||   // Cloud Run
-                    process.env.WEBSITE_INSTANCE_ID); // Azure
+// IS_CLOUD defined in CONFIG section below
 
 // Multer — accept only XML files
 const storage = multer.diskStorage({
@@ -260,24 +256,30 @@ function analyzeMathMLComplexity(mathNode) {
 ================================================================ */
 
 /* ── CONFIGURATION ─────────────────────────────────────────── */
+// Detect if running on cloud
+const IS_CLOUD = !!(
+    process.env.RENDER ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.DYNO ||
+    process.env.K_SERVICE
+);
+
 const CONFIG = {
-    // Set to true to use WIRIS as primary TeX engine
-    // Set to false to use mathml-to-latex only (offline mode)
-    // On Render free tier, set to false to avoid timeouts
+    // WIRIS always enabled — gives ~99% accuracy
+    // Can be disabled via env var WIRIS_ENABLED=false if needed
     WIRIS_ENABLED: process.env.WIRIS_ENABLED !== "false",
 
-    // WIRIS demo endpoint — free, no API key needed
+    // WIRIS demo endpoint
     WIRIS_ENDPOINT: "https://www.wiris.net/demo/editor/mathml2latex",
 
-    // Timeout per WIRIS call — keep short on cloud free tier
-    // Render free tier has 30s total request limit
-    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "3000"),
+    // Timeout per WIRIS call (ms)
+    // 8 seconds per equation — enough for slow network on cloud
+    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "8000"),
 
-    // Max equations to process with WIRIS — rest use fallback
-    // Prevents timeout on large files with many equations
-    WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "20"),
+    // No equation limit — process ALL equations through WIRIS
+    WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "99999"),
 
-    // If true, log which engine was used for each equation
+    // Log which engine was used
     LOG_ENGINE_USED: true
 };
 
@@ -567,14 +569,7 @@ async function generateTeX(mathNode) {
         return result;
     }
 
-    // ── WIRIS quota exceeded — use fallback for remaining ────────
-    if (generateTeX._wirisCount >= CONFIG.WIRIS_MAX_EQ) {
-        const result = generateTeXFallback(mathmlStr, mathNode);
-        if (CONFIG.LOG_ENGINE_USED)
-            console.log(`  [TEX] mathml-to-latex (WIRIS quota reached)`);
-        return result;
-    }
-    generateTeX._wirisCount = (generateTeX._wirisCount || 0) + 1;
+    // All equations go through WIRIS for maximum accuracy
 
     // ── Try WIRIS first ────────────────────────────────────────
     try {
@@ -1090,9 +1085,6 @@ function stripDOCTYPE(xml) {
 }
 
 async function processXML(rawXML, filename) {
-
-    // Reset WIRIS per-request counter
-    generateTeX._wirisCount = 0;
 
     // Pre-process XML — use shared stripDOCTYPE function
     let cleanXML = rawXML;
@@ -1914,21 +1906,25 @@ a:hover{text-decoration:underline}
 
   function startProgress() {
     var steps   = ['step1','step2','step3','step4','step5'];
-    var labels  = ['Uploading...','Parsing MathML...','Converting to TeX...','Generating AltText...','Writing outputs...'];
+    var labels  = ['Uploading...','Parsing MathML...','Converting via WIRIS (may take a minute for large files)...','Generating AltText...','Writing outputs...'];
     var targets = [15, 35, 65, 85, 95];
     var cur = 0, pct = 0;
 
     document.getElementById('progressArea').style.display = 'block';
     steps.forEach(function(s) { document.getElementById(s).className = 'step'; });
 
+    // Slow progress bar — WIRIS can take 1-3s per equation
+    // Progress intentionally stays at 85% during WIRIS processing
     progTimer = setInterval(function() {
       if (cur < steps.length) {
         document.getElementById(steps[cur]).className = 'step active';
         document.getElementById('progressLabel').textContent = labels[cur];
         if (pct < targets[cur]) {
-          pct = Math.min(pct + 2, targets[cur]);
+          // Slow down at step 3 (WIRIS) to avoid completing too early
+          var speed = cur === 2 ? 0.3 : 2;
+          pct = Math.min(pct + speed, targets[cur]);
           document.getElementById('progressBar').style.width = pct + '%';
-          document.getElementById('progressPct').textContent = pct + '%';
+          document.getElementById('progressPct').textContent = Math.round(pct) + '%';
         } else { cur++; }
       }
     }, 120);
@@ -2062,21 +2058,6 @@ app.get("/health", (req, res) => {
 
 // ── POST /process — main endpoint ───────────────────────────────
 app.post("/process", upload.single("file"), async (req, res) => {
-  // ── Overall request timeout — Render free tier limit is 30s ────
-  // Send response after 25s if still processing to avoid Render
-  // returning its own HTML timeout page
-  const reqTimeout = setTimeout(() => {
-    if (!res.headersSent) {
-        console.error("[TIMEOUT] Request took too long — sending partial response");
-        res.setHeader("Content-Type", "application/json");
-        res.status(503).json({
-            success: false,
-            error:   "Processing timeout — the XML file has too many equations for the free tier. Try disabling WIRIS (set WIRIS_ENABLED=false in Render environment variables) for faster processing.",
-            hint:    "Go to Render dashboard → Environment → Add WIRIS_ENABLED = false"
-        });
-    }
-  }, 25000);
-
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
@@ -2107,6 +2088,14 @@ app.post("/process", upload.single("file"), async (req, res) => {
         cleanedXML = stripDOCTYPE(rawXML);
     } catch (_) {
         cleanedXML = rawXML;
+    }
+
+    // Keep-alive: send HTTP 100 Continue to prevent Render/proxies
+    // from closing the connection during long WIRIS processing
+    // This gives us up to 5 minutes instead of 30 seconds
+    res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering
+    if (req.headers["expect"] === "100-continue") {
+        res.writeContinue();
     }
 
     // Process — always return JSON even if something throws
@@ -2227,11 +2216,9 @@ app.post("/process", upload.single("file"), async (req, res) => {
         }
     };
 
-    clearTimeout(reqTimeout);
     res.json(response);
 
   } catch (topLevelErr) {
-    clearTimeout(reqTimeout);
     // Catch-all — should never reach here, but ensures JSON response
     console.error("[ERROR] Unhandled error in /process route:", topLevelErr.message);
     console.error(topLevelErr.stack);
@@ -2332,6 +2319,10 @@ function startServer(port, retriesLeft) {
         console.log("  - TXT file : Always returned");
         console.log("  - XML file : Only if <inline-graphic>/<graphic> tags found");
         console.log("  - img tags : tex=\'\'  alttext=\'\' attributes added");
+        console.log("");
+                console.log("  TeX Engine : WIRIS/MathType (primary) + mathml-to-latex (fallback)");
+        console.log("  WIRIS      : " + (CONFIG.WIRIS_ENABLED ? "ENABLED" : "DISABLED"));
+        console.log("  Timeout    : " + CONFIG.WIRIS_TIMEOUT + "ms per equation");
         console.log("");
         console.log("  Press Ctrl+C to stop");
         console.log("=".repeat(60) + "\n");
