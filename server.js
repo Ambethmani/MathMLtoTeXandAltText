@@ -1849,145 +1849,309 @@ app.get("/ui", (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MathMLtoTeXandAltText</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+:root{
+  --bg:       #0b0d0f;
+  --bg2:      #111318;
+  --bg3:      #161a1f;
+  --surface:  #1c2128;
+  --surface2: #222831;
+  --border:   rgba(255,255,255,0.07);
+  --border2:  rgba(255,255,255,0.12);
+  --border3:  rgba(255,255,255,0.18);
+  --text:     #e8eaed;
+  --muted:    rgba(232,234,237,0.45);
+  --muted2:   rgba(232,234,237,0.25);
+  --blue:     #3b82f6;
+  --blue-dim: rgba(59,130,246,0.12);
+  --blue-bdr: rgba(59,130,246,0.3);
+  --green:    #22c55e;
+  --green-dim:rgba(34,197,94,0.1);
+  --green-bdr:rgba(34,197,94,0.25);
+  --amber:    #f59e0b;
+  --red:      #ef4444;
+  --red-dim:  rgba(239,68,68,0.1);
+  --red-bdr:  rgba(239,68,68,0.25);
+  --radius:   10px;
+  --radius-sm:7px;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;color:#1a2f45;min-height:100vh}
+body{font-family:'Geist',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;overflow-x:hidden}
 
-/* Nav */
-nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;height:56px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(15,76,117,0.3)}
-.logo{width:34px;height:34px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px;flex-shrink:0}
-.nav-title{color:#fff;font-size:14px;font-weight:600;letter-spacing:-0.01em}
-.nav-badge{font-size:10px;padding:2px 8px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:99px;color:rgba(255,255,255,0.65);font-family:'JetBrains Mono',monospace}
-.nav-right{margin-left:auto;display:flex;align-items:center;gap:10px}
-.nav-by{font-size:12px;color:rgba(255,255,255,0.55)}
-.nav-by strong{color:rgba(255,255,255,0.9)}
-.nav-btn{font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.75);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:6px;text-decoration:none;font-family:inherit}
-.nav-btn:hover{background:rgba(255,255,255,0.16);border-color:rgba(255,255,255,0.35);color:#fff}
+/* Drifting orb background */
+.orb-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.55}
+.orb-1{width:520px;height:520px;background:radial-gradient(circle,rgba(59,130,246,0.22),transparent 70%);top:-160px;left:-100px;animation:drift1 18s ease-in-out infinite}
+.orb-2{width:440px;height:440px;background:radial-gradient(circle,rgba(139,92,246,0.18),transparent 70%);top:30%;right:-140px;animation:drift2 22s ease-in-out infinite}
+.orb-3{width:360px;height:360px;background:radial-gradient(circle,rgba(16,185,129,0.14),transparent 70%);bottom:-80px;left:30%;animation:drift3 16s ease-in-out infinite}
+.orb-4{width:280px;height:280px;background:radial-gradient(circle,rgba(245,158,11,0.1),transparent 70%);top:55%;left:15%;animation:drift4 20s ease-in-out infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0)}25%{transform:translate(40px,-30px)}50%{transform:translate(80px,20px)}75%{transform:translate(20px,50px)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}25%{transform:translate(-50px,30px)}50%{transform:translate(-20px,-40px)}75%{transform:translate(-60px,10px)}}
+@keyframes drift3{0%,100%{transform:translate(0,0)}33%{transform:translate(-30px,-25px)}66%{transform:translate(40px,-10px)}}
+@keyframes drift4{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-40px)}}
 
-/* Layout */
-.wrap{max-width:1080px;margin:0 auto;padding:20px 16px}
-.grid{display:grid;grid-template-columns:1fr 290px;gap:16px}
+/* Ensure all content sits above orbs */
+nav,.wrap{position:relative;z-index:1}
 
-/* Cards */
-.card{background:#fff;border:1px solid #dde3ec;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(15,76,117,0.06)}
-.card+.card{margin-top:14px}
-.card-head{padding:13px 18px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;background:#f8fafd}
-.card-title{font-size:11px;font-weight:600;color:#5c7a9c;text-transform:uppercase;letter-spacing:0.07em}
-.card-meta{font-size:11px;color:#94b0c8}
-.card-body{padding:18px}
+/* ── Nav ─────────────────────────────────────────────── */
+nav{
+  height:52px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border2);
+  display:flex;align-items:center;
+  padding:0 20px;gap:10px;
+  position:sticky;top:0;z-index:10;
+}
+.logo{
+  width:30px;height:30px;
+  background:var(--blue);
+  border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-weight:700;font-size:14px;flex-shrink:0;
+  letter-spacing:-0.02em;
+}
+.nav-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-0.01em}
+.nav-badge{
+  font-size:10px;padding:2px 7px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:5px;
+  color:var(--muted);
+  font-family:'Geist Mono',monospace;
+}
+.nav-sep{width:1px;height:16px;background:var(--border2);margin:0 4px}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.nav-by{font-size:12px;color:var(--muted2)}
+.nav-by strong{color:var(--muted)}
+.gh-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 10px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:6px;
+  color:var(--muted);font-size:11px;
+  text-decoration:none;font-family:inherit;
+  cursor:pointer;transition:all 0.15s;
+}
+.gh-btn:hover{border-color:var(--border3);color:var(--text);background:var(--surface2)}
 
-/* Drop zone */
-.dropzone{border:2px dashed #c8d8ea;border-radius:10px;padding:36px 20px;text-align:center;cursor:pointer;background:#f8fafd;transition:all 0.2s;position:relative}
-.dropzone:hover,.dropzone.dragover{border-color:#1b6ca8;background:#eef5fc}
-.dropzone:hover .dz-icon{transform:translateY(-3px);background:#e0eefa;border-color:#9ec5e8}
-.dz-icon{width:48px;height:48px;background:#eef5fc;border:1px solid #c8d8ea;border-radius:12px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;transition:all 0.2s}
-.dz-title{font-size:14px;font-weight:600;color:#1a2f45;margin-bottom:5px}
-.dz-sub{font-size:12px;color:#5c7a9c}
-.dz-sub span{color:#1b6ca8;cursor:pointer}
-.format-pills{display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:14px}
-.fpill{font-size:10px;padding:3px 9px;border-radius:99px;background:#eef5fc;color:#1b6ca8;border:1px solid #c8d8ea;font-weight:500;transition:all 0.15s}
-.fpill:hover{background:#1b6ca8;color:#fff;border-color:#1b6ca8}
+/* ── Layout ──────────────────────────────────────────── */
+.wrap{max-width:1060px;margin:0 auto;padding:20px 16px}
+.grid{display:grid;grid-template-columns:1fr 272px;gap:14px;align-items:start}
 
-/* File box */
-.file-box{display:flex;align-items:center;gap:12px;padding:13px 14px;background:#f8fafd;border-radius:10px;border:1px solid #dde3ec}
-.file-icon{width:38px;height:38px;border-radius:9px;background:#eef5fc;border:1px solid #c8d8ea;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.file-name{font-size:13px;font-weight:600;color:#1a2f45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.file-size{font-size:11px;color:#5c7a9c;font-family:'JetBrains Mono',monospace;margin-top:1px}
-.remove-btn{margin-left:auto;width:26px;height:26px;border-radius:7px;background:transparent;border:1px solid #dde3ec;color:#94b0c8;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all 0.15s;flex-shrink:0}
-.remove-btn:hover{background:#fff0f3;border-color:#f8a0b4;color:#e05577}
+/* ── Cards ───────────────────────────────────────────── */
+.card{
+  background:var(--bg2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  overflow:hidden;
+}
+.card+.card{margin-top:12px}
+.card-head{
+  padding:11px 16px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em}
+.card-meta{font-size:11px;color:var(--muted2)}
+.card-body{padding:16px}
 
-/* Process button */
-.process-btn{width:100%;margin-top:12px;padding:11px;border-radius:9px;border:none;background:#1b6ca8;color:#fff;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:8px}
-.process-btn:hover{background:#0f4c75;box-shadow:0 4px 12px rgba(27,108,168,0.3)}
+/* ── Drop zone ───────────────────────────────────────── */
+.dropzone{
+  border:1.5px dashed var(--border2);
+  border-radius:var(--radius-sm);
+  padding:32px 20px;
+  text-align:center;cursor:pointer;
+  background:var(--bg3);
+  transition:all 0.2s;position:relative;
+}
+.dropzone:hover,.dropzone.dragover{
+  border-color:var(--blue);
+  background:rgba(59,130,246,0.04);
+}
+.dropzone:hover .dz-icon{transform:translateY(-2px)}
+.dz-icon{
+  width:44px;height:44px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:10px;
+  margin:0 auto 13px;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform 0.2s;
+}
+.dz-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;letter-spacing:-0.01em}
+.dz-sub{font-size:12px;color:var(--muted)}
+.dz-sub span{color:var(--blue);cursor:pointer}
+.format-pills{display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:13px}
+.fpill{
+  font-size:10px;padding:3px 9px;border-radius:5px;
+  background:var(--surface);color:var(--muted);
+  border:1px solid var(--border2);font-weight:500;
+  transition:all 0.15s;
+}
+.fpill:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
+
+/* ── File info ───────────────────────────────────────── */
+.file-box{
+  display:flex;align-items:center;gap:11px;
+  padding:12px 13px;
+  background:var(--bg3);
+  border-radius:var(--radius-sm);
+  border:1px solid var(--border2);
+}
+.file-icon{
+  width:36px;height:36px;border-radius:8px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.file-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em}
+.file-size{font-size:11px;color:var(--muted);font-family:'Geist Mono',monospace;margin-top:1px}
+.remove-btn{
+  margin-left:auto;width:26px;height:26px;
+  border-radius:6px;background:transparent;
+  border:1px solid var(--border);
+  color:var(--muted2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;transition:all 0.15s;flex-shrink:0;
+}
+.remove-btn:hover{background:var(--red-dim);border-color:var(--red-bdr);color:var(--red)}
+
+/* ── Process button ──────────────────────────────────── */
+.process-btn{
+  width:100%;margin-top:11px;padding:10px;
+  border-radius:var(--radius-sm);border:none;
+  background:var(--blue);color:#fff;
+  font-size:13px;font-weight:600;font-family:inherit;
+  cursor:pointer;transition:all 0.15s;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  letter-spacing:-0.01em;
+}
+.process-btn:hover{background:#2563eb;box-shadow:0 0 0 3px rgba(59,130,246,0.2)}
 .process-btn:active{transform:scale(0.98)}
-.process-btn:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none;transform:none}
+.process-btn:disabled{opacity:0.35;cursor:not-allowed;box-shadow:none;transform:none}
 
-/* Progress */
-.prog-wrap{padding:4px 0}
-.prog-steps{display:flex;gap:5px;margin-bottom:14px}
-.step{flex:1;height:3px;border-radius:99px;background:#e8eef5;transition:background 0.4s}
-.step.done{background:#1b6ca8}
-.step.active{background:#5aabde;animation:stepblink 1s ease-in-out infinite}
-@keyframes stepblink{0%,100%{opacity:1}50%{opacity:0.45}}
-.prog-pct{font-size:26px;font-weight:700;color:#0f4c75;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:-0.02em}
-.prog-label{font-size:12px;color:#5c7a9c;text-align:center;margin-top:4px}
+/* ── Progress ────────────────────────────────────────── */
+.prog-steps{display:flex;gap:4px;margin-bottom:14px}
+.step{flex:1;height:2px;border-radius:99px;background:var(--surface2);transition:background 0.4s}
+.step.done{background:var(--blue)}
+.step.active{background:var(--blue);animation:stepfade 1s ease-in-out infinite}
+@keyframes stepfade{0%,100%{opacity:1}50%{opacity:0.35}}
 
-/* Wave */
-.wave-wrap{height:40px;overflow:hidden;margin:10px 0;border-radius:8px;background:#f0f7ff}
-.wave-inner{height:100%;display:flex;align-items:flex-end}
-.wave-bar{flex:1;background:#1b6ca8;border-radius:2px 2px 0 0;animation:wavebar 1.2s ease-in-out infinite}
-.wave-bar:nth-child(2){animation-delay:0.1s;opacity:0.8}
-.wave-bar:nth-child(3){animation-delay:0.2s;opacity:0.9}
-.wave-bar:nth-child(4){animation-delay:0.3s;opacity:0.7}
-.wave-bar:nth-child(5){animation-delay:0.4s;opacity:0.85}
-.wave-bar:nth-child(6){animation-delay:0.15s;opacity:0.75}
-.wave-bar:nth-child(7){animation-delay:0.25s;opacity:0.9}
-.wave-bar:nth-child(8){animation-delay:0.35s;opacity:0.8}
-@keyframes wavebar{0%,100%{height:30%}50%{height:85%}}
+/* Wave bars */
+.wave-wrap{
+  display:flex;align-items:flex-end;gap:3px;
+  height:36px;padding:0 2px;margin:10px 0;
+}
+.wbar{
+  flex:1;background:var(--surface2);border-radius:2px;
+  animation:wbounce 1.2s ease-in-out infinite;
+}
+.wbar:nth-child(1){animation-delay:0s}
+.wbar:nth-child(2){animation-delay:0.1s}
+.wbar:nth-child(3){animation-delay:0.2s}
+.wbar:nth-child(4){animation-delay:0.3s}
+.wbar:nth-child(5){animation-delay:0.15s}
+.wbar:nth-child(6){animation-delay:0.25s}
+.wbar:nth-child(7){animation-delay:0.05s}
+.wbar:nth-child(8){animation-delay:0.35s}
+.wbar:nth-child(9){animation-delay:0.12s}
+.wbar:nth-child(10){animation-delay:0.22s}
+.wbar:nth-child(11){animation-delay:0.08s}
+.wbar:nth-child(12){animation-delay:0.18s}
+@keyframes wbounce{0%,100%{height:20%;background:var(--surface2)}50%{height:90%;background:var(--blue)}}
 
 /* Ticker */
-.ticker-wrap{display:flex;align-items:center;justify-content:center;gap:6px;margin:8px 0}
-.ticker-label{font-size:11px;color:#5c7a9c}
-.ticker-num{font-size:28px;font-weight:700;color:#0f4c75;font-family:'JetBrains Mono',monospace;min-width:52px;text-align:center;transition:transform 0.1s}
-.ticker-unit{font-size:11px;color:#5c7a9c}
+.ticker-wrap{display:flex;align-items:baseline;justify-content:center;gap:6px;margin:6px 0}
+.ticker-label{font-size:11px;color:var(--muted)}
+.ticker-num{font-size:30px;font-weight:700;color:var(--green);font-family:'Geist Mono',monospace;min-width:50px;text-align:center;transition:transform 0.08s}
+.ticker-unit{font-size:11px;color:var(--muted)}
 
-/* Error */
-.error-box{display:none;padding:11px 14px;background:#fff5f7;border:1px solid #f8a0b4;border-radius:9px;font-size:13px;color:#c0395a;margin-top:12px}
+.prog-pct{font-size:24px;font-weight:700;color:var(--text);text-align:center;font-family:'Geist Mono',monospace;letter-spacing:-0.03em}
+.prog-label{font-size:11px;color:var(--muted);text-align:center;margin-top:3px}
 
-/* Status pill */
-.status-pill{font-size:11px;padding:3px 10px;border-radius:99px;font-weight:600}
-.status-ok{background:#e8f7ef;border:1px solid #a8dfc0;color:#1a7a46}
-.status-warn{background:#fef7e8;border:1px solid #f0d090;color:#8a5c00}
+/* ── Error ───────────────────────────────────────────── */
+.error-box{
+  display:none;padding:10px 13px;
+  background:var(--red-dim);border:1px solid var(--red-bdr);
+  border-radius:var(--radius-sm);
+  font-size:12px;color:var(--red);margin-top:11px;
+}
 
-/* Stats */
-.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
-.stat-card{background:#f8fafd;border:1px solid #dde3ec;border-radius:9px;padding:11px;text-align:center}
-.stat-num{font-size:22px;font-weight:700;color:#0f4c75;font-family:'JetBrains Mono',monospace}
-.stat-num.ok{color:#1a7a46}
-.stat-num.warn{color:#8a5c00}
-.stat-num.fail{color:#c0395a}
-.stat-lbl{font-size:10px;color:#5c7a9c;margin-top:2px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500}
+/* ── Results ─────────────────────────────────────────── */
+.status-pill{font-size:11px;padding:3px 10px;border-radius:5px;font-weight:600}
+.status-ok{background:var(--green-dim);border:1px solid var(--green-bdr);color:var(--green)}
+.status-warn{background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.25);color:var(--amber)}
 
-/* Download cards */
-.dl-cards{display:flex;flex-direction:column;gap:8px}
-.dl-card{display:flex;align-items:center;gap:13px;padding:12px 14px;background:#f8fafd;border:1px solid #dde3ec;border-radius:10px;text-decoration:none;transition:all 0.15s;cursor:pointer}
-.dl-card:hover{background:#eef5fc;border-color:#9ec5e8;transform:translateX(3px)}
-.dl-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;font-family:'JetBrains Mono',monospace}
-.dl-icon.txt{background:#e8f7ef;color:#1a7a46;border:1px solid #a8dfc0}
-.dl-icon.xml{background:#eef5fc;color:#1b6ca8;border:1px solid #9ec5e8}
-.dl-icon.log{background:#fef7e8;color:#8a5c00;border:1px solid #f0d090}
-.dl-name{font-size:13px;font-weight:600;color:#1a2f45}
-.dl-desc{font-size:11px;color:#5c7a9c;margin-top:1px}
-.dl-arrow{margin-left:auto;color:#94b0c8;font-size:14px;transition:transform 0.15s}
-.dl-card:hover .dl-arrow{transform:translateY(2px);color:#1b6ca8}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:13px}
+.stat-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px;text-align:center}
+.stat-num{font-size:22px;font-weight:700;font-family:'Geist Mono',monospace;color:var(--text)}
+.stat-num.ok{color:var(--green)}
+.stat-num.warn{color:var(--amber)}
+.stat-num.fail{color:var(--red)}
+.stat-lbl{font-size:9px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500}
 
-/* Reset */
-.reset-btn{width:100%;margin-top:10px;padding:9px;background:transparent;border:1px solid #dde3ec;border-radius:9px;color:#5c7a9c;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.15s}
-.reset-btn:hover{border-color:#c8d8ea;color:#1b6ca8;background:#f8fafd}
+/* ── Download cards ──────────────────────────────────── */
+.dl-cards{display:flex;flex-direction:column;gap:7px}
+.dl-card{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 13px;
+  background:var(--bg3);border:1px solid var(--border2);
+  border-radius:var(--radius-sm);
+  text-decoration:none;transition:all 0.15s;cursor:pointer;
+}
+.dl-card:hover{background:var(--surface);border-color:var(--border3);transform:translateX(2px)}
+.dl-icon{
+  width:32px;height:32px;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;flex-shrink:0;
+  font-family:'Geist Mono',monospace;
+}
+.dl-icon.txt{background:var(--green-dim);color:var(--green);border:1px solid var(--green-bdr)}
+.dl-icon.xml{background:var(--blue-dim);color:var(--blue);border:1px solid var(--blue-bdr)}
+.dl-icon.log{background:rgba(245,158,11,0.1);color:var(--amber);border:1px solid rgba(245,158,11,0.25)}
+.dl-name{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-0.01em}
+.dl-desc{font-size:11px;color:var(--muted);margin-top:1px}
+.dl-arrow{margin-left:auto;color:var(--muted2);font-size:13px;transition:all 0.15s}
+.dl-card:hover .dl-arrow{color:var(--blue);transform:translateY(2px)}
 
-/* Sidebar widgets */
-.engine-row{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#f8fafd;border:1px solid #dde3ec;border-radius:8px;margin-bottom:6px}
-.edot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.edot.live{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.15)}
-.edot.fallback{background:#f59e0b}
-.engine-name{font-size:12px;color:#1a2f45;font-weight:500}
-.engine-sub{font-size:10px;color:#94b0c8;margin-top:1px}
+/* ── Reset ───────────────────────────────────────────── */
+.reset-btn{
+  width:100%;margin-top:10px;padding:9px;
+  background:transparent;border:1px solid var(--border2);
+  border-radius:var(--radius-sm);color:var(--muted);
+  font-size:12px;font-family:inherit;cursor:pointer;
+  transition:all 0.15s;
+}
+.reset-btn:hover{border-color:var(--border3);color:var(--text);background:var(--surface)}
 
-.info-section{margin-bottom:4px}
-.info-label{font-size:10px;font-weight:600;color:#94b0c8;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;padding:0 2px}
-.info-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #eef2f7}
+/* ── Sidebar ─────────────────────────────────────────── */
+.engine-row{
+  display:flex;align-items:center;gap:9px;
+  padding:9px 11px;
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:var(--radius-sm);margin-bottom:5px;
+}
+.edot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.edot.live{background:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,0.15)}
+.edot.fallback{background:var(--amber)}
+.engine-name{font-size:12px;color:var(--text);font-weight:500}
+.engine-sub{font-size:10px;color:var(--muted);margin-top:1px}
+
+.section-lbl{font-size:10px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;padding:0 1px}
+.info-row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--border)}
 .info-row:last-child{border:none}
-.info-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.info-text{font-size:12px;color:#1a2f45}
-.info-text span{color:#5c7a9c;font-size:11px;display:block;margin-top:1px}
+.info-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.info-text{font-size:12px;color:var(--text);font-weight:500}
+.info-sub{font-size:11px;color:var(--muted);margin-top:1px}
 
-.built-by{text-align:center;font-size:11px;color:#94b0c8;padding:8px 0}
-.built-by a{color:#1b6ca8;text-decoration:none}
+.built-by{text-align:center;font-size:11px;color:var(--muted2);padding:10px 0 2px}
+.built-by a{color:var(--blue);text-decoration:none}
 .built-by a:hover{text-decoration:underline}
 
-/* Mobile */
-@media(max-width:700px){
+/* ── Mobile ──────────────────────────────────────────── */
+@media(max-width:680px){
   .grid{grid-template-columns:1fr}
   .sidebar{order:-1}
   .stats-grid{grid-template-columns:repeat(2,1fr)}
@@ -2001,31 +2165,39 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
   <div class="logo">M</div>
   <span class="nav-title">MathMLtoTeXandAltText</span>
   <span class="nav-badge">v1.0</span>
+  <div class="nav-sep"></div>
+  <span style="font-size:11px;color:var(--muted2)">MathML &#8594; TeX + AltText</span>
   <div class="nav-right">
     <span class="nav-by">by <strong>Ambeth</strong></span>
-    <a class="nav-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
+    <a class="gh-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
       GitHub
     </a>
   </div>
 </nav>
 
+<div class="orb-wrap">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+  <div class="orb orb-4"></div>
+</div>
+
 <div class="wrap">
 <div class="grid">
 
 <!-- LEFT -->
 <div>
-
   <div class="card">
     <div class="card-head">
       <span class="card-title">Upload XML File</span>
-      <span class="card-meta">.xml files only</span>
+      <span class="card-meta">.xml only &middot; max 20MB</span>
     </div>
     <div class="card-body">
 
       <div id="dropZone" class="dropzone">
         <div class="dz-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1b6ca8" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(232,234,237,0.5)" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
         <div class="dz-title">Drop your XML file here</div>
         <div class="dz-sub">or <span>click to browse</span></div>
@@ -2045,7 +2217,7 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
       <div id="fileInfo" style="display:none">
         <div class="file-box">
           <div class="file-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1b6ca8" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           </div>
           <div style="min-width:0;flex:1">
             <div class="file-name" id="fileName">—</div>
@@ -2054,40 +2226,35 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
           <button class="remove-btn" onclick="removeFile()">&#215;</button>
         </div>
         <button class="process-btn" id="processBtn" disabled onclick="processFile()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           Process Equations
         </button>
       </div>
 
       <div id="progressArea" style="display:none">
-        <div class="prog-wrap">
-          <div class="prog-steps">
-            <div class="step" id="step1"></div>
-            <div class="step" id="step2"></div>
-            <div class="step" id="step3"></div>
-            <div class="step" id="step4"></div>
-            <div class="step" id="step5"></div>
-          </div>
-          <div class="wave-wrap">
-            <div class="wave-inner">
-              <div class="wave-bar"></div><div class="wave-bar"></div>
-              <div class="wave-bar"></div><div class="wave-bar"></div>
-              <div class="wave-bar"></div><div class="wave-bar"></div>
-              <div class="wave-bar"></div><div class="wave-bar"></div>
-            </div>
-          </div>
-          <div class="ticker-wrap" id="tickerArea" style="display:none">
-            <span class="ticker-label">equations found</span>
-            <span class="ticker-num" id="tickerNum">0</span>
-            <span class="ticker-unit">&#8593;</span>
-          </div>
-          <div class="prog-pct" id="progressPct">0%</div>
-          <div class="prog-label" id="progressLabel">Connecting...</div>
+        <div class="prog-steps">
+          <div class="step" id="step1"></div>
+          <div class="step" id="step2"></div>
+          <div class="step" id="step3"></div>
+          <div class="step" id="step4"></div>
+          <div class="step" id="step5"></div>
         </div>
+        <div class="wave-wrap">
+          <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+          <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+          <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+          <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+        </div>
+        <div class="ticker-wrap" id="tickerArea" style="display:none">
+          <span class="ticker-label">equations found</span>
+          <span class="ticker-num" id="tickerNum">0</span>
+          <span class="ticker-unit">&#8593;</span>
+        </div>
+        <div class="prog-pct" id="progressPct">0%</div>
+        <div class="prog-label" id="progressLabel">Connecting...</div>
       </div>
 
       <div id="errorBox" class="error-box"></div>
-
     </div>
   </div>
 
@@ -2102,12 +2269,10 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
       <button class="reset-btn" onclick="resetForm()">&#8592; Process another file</button>
     </div>
   </div>
-
 </div>
 
 <!-- SIDEBAR -->
 <div class="sidebar">
-
   <div class="card">
     <div class="card-head"><span class="card-title">TeX Engine</span></div>
     <div class="card-body">
@@ -2115,14 +2280,14 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
         <div class="edot live"></div>
         <div>
           <div class="engine-name">WIRIS / MathType API</div>
-          <div class="engine-sub">Primary — highest accuracy</div>
+          <div class="engine-sub">Primary &middot; highest accuracy</div>
         </div>
       </div>
-      <div class="engine-row" style="opacity:0.65">
+      <div class="engine-row" style="opacity:0.55">
         <div class="edot fallback"></div>
         <div>
           <div class="engine-name">mathml-to-latex</div>
-          <div class="engine-sub">Fallback — offline</div>
+          <div class="engine-sub">Fallback &middot; offline</div>
         </div>
       </div>
     </div>
@@ -2130,65 +2295,64 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
 
   <div class="card">
     <div class="card-body">
-      <div class="info-section" style="margin-bottom:16px">
-        <div class="info-label">Supported Publishers</div>
+      <div style="margin-bottom:16px">
+        <div class="section-lbl">Publishers</div>
         <div class="info-row">
-          <div class="info-dot" style="background:#1b6ca8"></div>
-          <div class="info-text">JATS / NLM <span>ACS, IOPP, LWW, CSIRO, Thieme</span></div>
+          <div class="info-dot" style="background:var(--blue)"></div>
+          <div><div class="info-text">JATS / NLM</div><div class="info-sub">ACS, IOPP, LWW, CSIRO, Thieme</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#e05577"></div>
-          <div class="info-text">Elsevier / MRW <span>ce: namespace, altimg</span></div>
+          <div class="info-dot" style="background:#f97316"></div>
+          <div><div class="info-text">Elsevier / MRW</div><div class="info-sub">ce: namespace, altimg</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#0f4c75"></div>
-          <div class="info-text">Springer / Books <span>InlineEquation, Equation</span></div>
+          <div class="info-dot" style="background:#a78bfa"></div>
+          <div><div class="info-text">Springer / Books</div><div class="info-sub">InlineEquation, Equation</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#8a5c00"></div>
-          <div class="info-text">Wiley <span>bare math[@altimg]</span></div>
+          <div class="info-dot" style="background:var(--amber)"></div>
+          <div><div class="info-text">Wiley</div><div class="info-sub">bare math[@altimg]</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#1a7a46"></div>
-          <div class="info-text">ACS Books / BITS <span>alternatives + mml:math</span></div>
+          <div class="info-dot" style="background:var(--green)"></div>
+          <div><div class="info-text">ACS Books / BITS</div><div class="info-sub">alternatives + mml:math</div></div>
         </div>
       </div>
-      <div class="info-section">
-        <div class="info-label">Output Files</div>
+      <div>
+        <div class="section-lbl">Output Files</div>
         <div class="info-row">
-          <div class="info-dot" style="background:#1a7a46"></div>
-          <div class="info-text">equations.txt <span>TeX + AltText + MathML</span></div>
+          <div class="info-dot" style="background:var(--green)"></div>
+          <div><div class="info-text">equations.txt</div><div class="info-sub">TeX + AltText + MathML</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#1b6ca8"></div>
-          <div class="info-text">modified.xml <span>with tex="" alttext=""</span></div>
+          <div class="info-dot" style="background:var(--blue)"></div>
+          <div><div class="info-text">modified.xml</div><div class="info-sub">with tex="" alttext=""</div></div>
         </div>
         <div class="info-row">
-          <div class="info-dot" style="background:#8a5c00"></div>
-          <div class="info-text">log.txt <span>complexity analysis</span></div>
+          <div class="info-dot" style="background:var(--amber)"></div>
+          <div><div class="info-text">log.txt</div><div class="info-sub">complexity analysis</div></div>
         </div>
       </div>
     </div>
   </div>
 
   <div class="built-by">
-    Built by <strong>Ambeth</strong> &nbsp;&middot;&nbsp;
+    Built by <strong style="color:var(--muted)">Ambeth</strong> &nbsp;&middot;&nbsp;
     <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">GitHub</a>
   </div>
-
 </div>
+
 </div>
 </div>
 
 <script>
   var selectedFile = null;
-
   document.addEventListener('dragover', function(e){ e.preventDefault(); });
   document.addEventListener('drop',     function(e){ e.preventDefault(); });
 
   var dz = document.getElementById('dropZone');
   dz.addEventListener('dragover',  function(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
-  dz.addEventListener('dragleave', function(e){ e.stopPropagation(); dz.classList.remove('dragover'); });
+  dz.addEventListener('dragleave', function(){ dz.classList.remove('dragover'); });
   dz.addEventListener('drop', function(e){
     e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
     var f = e.dataTransfer && e.dataTransfer.files[0];
@@ -2210,7 +2374,6 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
     document.getElementById('errorBox').style.display = 'none';
     document.getElementById('results').style.display = 'none';
   }
-
   function setFile(f) { handleFile(f); }
 
   function removeFile() {
@@ -2228,37 +2391,37 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
     document.getElementById('errorBox').style.display = 'none';
   }
 
-  var progTimer = null, progPct = 0, progStep = 0;
-  var stepIds   = ['step1','step2','step3','step4','step5'];
-  var stepLabels = ['Connecting to server...','Parsing XML structure...','Converting via WIRIS...','Generating AltText...','Writing output files...'];
-  var stepTargets = [10, 28, 72, 88, 96];
+  var progTimer=null, progPct=0, progStep=0;
+  var stepIds    = ['step1','step2','step3','step4','step5'];
+  var stepLabels = ['Connecting...','Parsing XML...','Converting via WIRIS...','Generating AltText...','Writing outputs...'];
+  var stepTargets= [10, 28, 72, 88, 96];
 
   function startProgress() {
-    progPct = 0; progStep = 0;
-    document.getElementById('progressArea').style.display = 'block';
-    document.getElementById('fileInfo').style.display = 'none';
-    document.getElementById('tickerArea').style.display = 'none';
-    stepIds.forEach(function(s){ document.getElementById(s).className = 'step'; });
-    document.getElementById('progressPct').textContent = '0%';
-    document.getElementById('progressLabel').textContent = 'Connecting to server...';
-    var tickerVal = 0;
-    progTimer = setInterval(function(){
+    progPct=0; progStep=0;
+    document.getElementById('progressArea').style.display='block';
+    document.getElementById('fileInfo').style.display='none';
+    document.getElementById('tickerArea').style.display='none';
+    stepIds.forEach(function(s){ document.getElementById(s).className='step'; });
+    document.getElementById('progressPct').textContent='0%';
+    document.getElementById('progressLabel').textContent='Connecting...';
+    var tickerVal=0;
+    progTimer=setInterval(function(){
       if (progStep < stepIds.length) {
-        document.getElementById(stepIds[progStep]).className = 'step active';
-        document.getElementById('progressLabel').textContent = stepLabels[progStep];
-        if (progStep === 2) {
-          document.getElementById('tickerArea').style.display = 'flex';
+        document.getElementById(stepIds[progStep]).className='step active';
+        document.getElementById('progressLabel').textContent=stepLabels[progStep];
+        if (progStep===2) {
+          document.getElementById('tickerArea').style.display='flex';
           if (tickerVal < 50) {
             tickerVal += Math.floor(Math.random()*3)+1;
-            var el = document.getElementById('tickerNum');
-            el.textContent = tickerVal;
-            el.style.transform = 'scale(1.15)';
-            setTimeout(function(){ el.style.transform = 'scale(1)'; }, 100);
+            var el=document.getElementById('tickerNum');
+            el.textContent=tickerVal;
+            el.style.transform='scale(1.15)';
+            setTimeout(function(){ el.style.transform='scale(1)'; },80);
           }
         }
         if (progPct < stepTargets[progStep]) {
-          progPct = Math.min(progPct + (progStep===2 ? 0.35 : 1.8), stepTargets[progStep]);
-          document.getElementById('progressPct').textContent = Math.round(progPct) + '%';
+          progPct=Math.min(progPct+(progStep===2?0.35:1.8), stepTargets[progStep]);
+          document.getElementById('progressPct').textContent=Math.round(progPct)+'%';
         } else { progStep++; }
       }
     }, 120);
@@ -2266,42 +2429,41 @@ nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;he
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
-    stepIds.forEach(function(s){ document.getElementById(s).className = 'step done'; });
-    document.getElementById('progressPct').textContent = '100%';
-    document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
-    document.getElementById('tickerArea').style.display = 'none';
-    setTimeout(function(){ document.getElementById('progressArea').style.display = 'none'; }, 900);
+    stepIds.forEach(function(s){ document.getElementById(s).className='step done'; });
+    document.getElementById('progressPct').textContent='100%';
+    document.getElementById('progressLabel').textContent=success?'Complete!':'Failed';
+    document.getElementById('tickerArea').style.display='none';
+    setTimeout(function(){ document.getElementById('progressArea').style.display='none'; },900);
   }
 
   function showError(msg) {
-    var box = document.getElementById('errorBox');
-    box.textContent = '\u26a0 ' + msg;
-    box.style.display = 'block';
-    document.getElementById('processBtn').disabled = false;
+    var box=document.getElementById('errorBox');
+    box.textContent='\u26a0 '+msg;
+    box.style.display='block';
+    document.getElementById('processBtn').disabled=false;
+  }
+
+  function processFile() {
+    if (!selectedFile) return;
+    document.getElementById('processBtn').disabled=true;
+    document.getElementById('results').style.display='none';
+    document.getElementById('errorBox').style.display='none';
+    startProgress();
+    wakeServer(0);
   }
 
   function sc(num, label, cls) {
-    return '<div class="stat-card"><div class="stat-num ' + cls + '">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
+    return '<div class="stat-card"><div class="stat-num '+cls+'">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
   }
-
   function dlCard(text, filename, iconClass, icon, name, desc) {
-    var blob = new Blob([text], { type:'text/plain;charset=utf-8' });
-    var url  = URL.createObjectURL(blob);
+    var blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+    var url=URL.createObjectURL(blob);
     return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
       '<div class="dl-icon '+iconClass+'">'+icon+'</div>' +
       '<div><div class="dl-name">'+name+'</div><div class="dl-desc">'+desc+'</div></div>' +
       '<div class="dl-arrow">&#8595;</div></a>';
   }
 
-  function processFile() {
-    if (!selectedFile) return;
-    document.getElementById('processBtn').disabled = true;
-    document.getElementById('results').style.display = 'none';
-    document.getElementById('errorBox').style.display = 'none';
-    startProgress();
-    document.getElementById('progressLabel').textContent = 'Waking server...';
-    wakeServer(0);
-  }
   function wakeServer(attempts) {
     if (attempts > 20) { // max 60s wait (20 x 3s)
       sendFile(); // try anyway
