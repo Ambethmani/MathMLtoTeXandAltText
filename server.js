@@ -2121,7 +2121,8 @@ a:hover{text-decoration:underline}
       .then(function(r) {
         if (r.ok) {
           document.getElementById('progressLabel').textContent = 'Server ready, uploading...';
-          sendFile();
+          // Small delay to ensure server is fully ready after wake
+          setTimeout(sendFile, 500);
         } else {
           setTimeout(function() { wakeServer(attempts + 1); }, 3000);
         }
@@ -2136,14 +2137,29 @@ a:hover{text-decoration:underline}
     formData.append('file', selectedFile);
 
     fetch('/process', { method: 'POST', body: formData })
-      .then(function(resp) { return resp.text(); })
-      .then(function(rawText) {
+      .then(function(resp) {
+        var status = resp.status;
+        return resp.text().then(function(t) { return {status:status, text:t}; });
+      })
+      .then(function(obj) {
+        var rawText = obj.text;
+        var httpStatus = obj.status;
         var data;
         try { data = JSON.parse(rawText); }
         catch(e) {
           stopProgress(false);
-          var hint = rawText.replace(/<[^>]+>/g,'').substring(0,200).trim();
-          showError('Server error: ' + hint);
+          // Show HTTP status to help diagnose cold-start vs processing errors
+          if (httpStatus === 502 || httpStatus === 503 || httpStatus === 504) {
+            showError('Server waking up (' + httpStatus + '). Auto-retrying in 10s...');
+            setTimeout(function() {
+              document.getElementById('errorBox').style.display = 'none';
+              document.getElementById('processBtn').disabled = false;
+              processFile();
+            }, 10000);
+          } else {
+            var hint = rawText.replace(/<[^>]+>/g,'').substring(0,200).trim();
+            showError('[HTTP ' + httpStatus + '] ' + hint);
+          }
           document.getElementById('processBtn').disabled = false;
           return;
         }
