@@ -2134,22 +2134,31 @@ a:hover{text-decoration:underline}
 
   function sendFile() {
     // Strip DOCTYPE + ENTITY declarations in browser BEFORE sending
-    // Render's WAF blocks requests containing <!ENTITY ... SYSTEM ...>
-    // (it looks like an XXE injection attack to the firewall)
+    // Render WAF blocks <!ENTITY ... SYSTEM ...> as XXE attack pattern
+    // We save the original DOCTYPE and restore it in the output XML
     var reader = new FileReader();
     reader.onload = function(e) {
       var xmlText = e.target.result;
 
-      // Remove DOCTYPE block including internal subset [...]
-      xmlText = xmlText.replace(/<!DOCTYPE[^[>]*(\[[^\]]*\])?\s*>/gi, '');
-      // Remove any remaining ENTITY declarations
-      xmlText = xmlText.replace(/<!ENTITY[^>]*>/gi, '');
+      // Extract and save the original DOCTYPE block before stripping
+      var savedDoctype = '';
+      var doctypeMatch = xmlText.match(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/i);
+      if (doctypeMatch) {
+        savedDoctype = doctypeMatch[0];
+      }
 
-      // Send as clean XML blob — WAF won't block it
-      var cleanBlob = new Blob([xmlText], { type: 'application/xml' });
+      // Strip DOCTYPE and ENTITY so WAF doesn't block the upload
+      var cleanXml = xmlText.replace(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/gi, '');
+      cleanXml = cleanXml.replace(/<!ENTITY[^>]*>/gi, '');
+
+      // Send clean XML + original DOCTYPE as separate field
+      var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
       formData.append('file', cleanFile);
+      if (savedDoctype) {
+        formData.append('doctype', savedDoctype);
+      }
 
       fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
@@ -2277,7 +2286,7 @@ app.get("/health", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-app.post("/process", upload.single("file"), async (req, res) => {
+app.post("/process", upload.fields([{ name: "file", maxCount: 1 }]), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
@@ -2285,21 +2294,28 @@ app.post("/process", upload.single("file"), async (req, res) => {
   try {
 
     // ── Read uploaded file ───────────────────────────────────────
-    if (!req.file) {
+    const uploadedFile = req.files && req.files["file"] && req.files["file"][0];
+    if (!uploadedFile) {
         return res.status(400).json({ success: false, error: "No file uploaded." });
     }
-    const origName  = req.file.originalname;
+    const origName  = uploadedFile.originalname;
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
 
     let rawXML;
     try {
-        rawXML = fs.readFileSync(req.file.path, "utf8");
+        rawXML = fs.readFileSync(uploadedFile.path, "utf8");
     } catch (e) {
         return res.status(500).json({ success: false, error: "Cannot read file: " + e.message });
     }
     if (!rawXML || !rawXML.trim()) {
         return res.status(400).json({ success: false, error: "File is empty." });
+    }
+    // Restore original DOCTYPE — browser stripped it to bypass WAF
+    // The original DOCTYPE is sent as a separate form field
+    const originalDoctype = (req.body && req.body.doctype) ? req.body.doctype : null;
+    if (originalDoctype) {
+        console.log(`[INFO] DOCTYPE restored from form field (${originalDoctype.length} chars)`);
     }
     console.log(`[INFO] Received: ${origName} (${rawXML.length} chars)`);
 
@@ -2330,6 +2346,19 @@ app.post("/process", upload.single("file"), async (req, res) => {
             error: `Processing failed: ${e.message}`,
             hint:  "Check if the XML is valid. DOCTYPE with external DTD references are stripped automatically."
         });
+    }
+
+    // Restore original DOCTYPE in modified XML output
+    if (originalDoctype && result.xmlContent) {
+        if (result.xmlContent.startsWith('<?xml')) {
+            const declEnd = result.xmlContent.indexOf('?>') + 2;
+            result.xmlContent = result.xmlContent.slice(0, declEnd) +
+                '\n' + originalDoctype +
+                result.xmlContent.slice(declEnd);
+        } else {
+            result.xmlContent = originalDoctype + '\n' + result.xmlContent;
+        }
+        console.log('[INFO] DOCTYPE restored in output XML');
     }
 
     // Ensure OUTPUT folder exists (re-check at request time)
@@ -2375,7 +2404,7 @@ app.post("/process", upload.single("file"), async (req, res) => {
     }
 
     // Clean up uploaded file from disk
-    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
+    try { if (uploadedFile && uploadedFile.path) fs.unlinkSync(uploadedFile.path); } catch (_) {}
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
