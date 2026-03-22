@@ -4,18 +4,23 @@
 const fs      = require("fs");
 const path    = require("path");
 const http    = require("http");
-const { JSDOM, ResourceLoader } = require("jsdom");
+const { JSDOM } = require("jsdom");
 
-// Block all external resource loading — prevents JSDOM from fetching
-// external DTDs (e.g. art570.dtd) which hangs on cloud deployments
-class BlockingResourceLoader extends ResourceLoader {
-    fetch(url, options) {
-        // Return empty buffer for all external resources — never make network calls
-        console.log(`  [JSDOM] Blocked external resource: ${url}`);
-        return Promise.resolve(Buffer.from(""));
+// Block external resource loading (DTDs etc) — safe fallback if ResourceLoader unavailable
+let BLOCKED_RESOURCES = null;
+try {
+    const { ResourceLoader } = require("jsdom");
+    class BlockingResourceLoader extends ResourceLoader {
+        fetch(url, options) {
+            console.log(`  [JSDOM] Blocked: ${url}`);
+            return Promise.resolve(Buffer.from(""));
+        }
     }
+    BLOCKED_RESOURCES = new BlockingResourceLoader();
+    console.log("[INFO] JSDOM ResourceLoader: blocking external DTD fetches");
+} catch(e) {
+    console.log("[WARN] JSDOM ResourceLoader not available — external DTDs may cause delays");
 }
-const BLOCKED_RESOURCES = new BlockingResourceLoader();
 const { MathMLToLaTeX } = require("mathml-to-latex");
 const multer  = require("multer");
 const express = require("express");
@@ -1304,10 +1309,10 @@ async function processXML(rawXML, filename) {
 
     // Strategy 1: strict XML parser (best — preserves namespaces)
     try {
-        dom      = new JSDOM(cleanXML, {
-            contentType: "application/xml",
-            resources:   BLOCKED_RESOURCES    // block DTD/entity network calls
-        });
+        dom      = new JSDOM(cleanXML, Object.assign(
+            { contentType: "application/xml" },
+            BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
+        ));
         document = dom.window.document;
         if (document.querySelector("parsererror")) {
             const errText = document.querySelector("parsererror").textContent.substring(0, 120);
@@ -1319,10 +1324,10 @@ async function processXML(rawXML, filename) {
         console.log("  [INFO] Trying HTML parser...");
         // Strategy 2: HTML parser — more lenient, handles broken XML
         try {
-            dom      = new JSDOM(cleanXML, {
-                contentType: "text/html",
-                resources:   BLOCKED_RESOURCES
-            });
+            dom      = new JSDOM(cleanXML, Object.assign(
+                { contentType: "text/html" },
+                BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
+            ));
             document = dom.window.document;
             console.log("  [INFO] HTML parser succeeded");
         } catch (e2) {
@@ -2101,10 +2106,29 @@ a:hover{text-decoration:underline}
     startProgress();
     document.getElementById('progressLabel').textContent = 'Connecting...';
 
-    // Ping server first to wake it from Render sleep, then upload
-    fetch('/health', { method: 'GET' })
-      .then(function() { return sendFile(); })
-      .catch(function() { return sendFile(); }); // still try even if ping fails
+    // Wake server first — Render free tier takes ~60s to wake from sleep
+    // Keep pinging /health until it responds, then upload
+    document.getElementById('progressLabel').textContent = 'Waking server (may take ~30s on first use)...';
+    wakeServer(0);
+  }
+
+  function wakeServer(attempts) {
+    if (attempts > 20) { // max 60s wait (20 x 3s)
+      sendFile(); // try anyway
+      return;
+    }
+    fetch('/health')
+      .then(function(r) {
+        if (r.ok) {
+          document.getElementById('progressLabel').textContent = 'Server ready, uploading...';
+          sendFile();
+        } else {
+          setTimeout(function() { wakeServer(attempts + 1); }, 3000);
+        }
+      })
+      .catch(function() {
+        setTimeout(function() { wakeServer(attempts + 1); }, 3000);
+      });
   }
 
   function sendFile() {
