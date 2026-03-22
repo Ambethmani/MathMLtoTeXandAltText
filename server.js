@@ -1758,133 +1758,455 @@ app.get("/ui", (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MathMLtoTeXandAltText — by Ambeth</title>
+<title>MathMLtoTeXandAltText</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--border2:#3a3a3a;--text:#e8e8e8;--muted:#888;--blue:#4f8ef7;--blue2:#3a7de8;--green:#22c55e;--green2:#16a34a;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
-a{color:var(--blue);text-decoration:none}
-a:hover{text-decoration:underline}
+:root {
+  --c1: #6C3BFF;
+  --c2: #FF3B8B;
+  --c3: #00D4FF;
+  --c4: #FF8C00;
+  --c5: #00E5A0;
+  --bg: #0A0A12;
+  --bg2: #12121E;
+  --bg3: #1A1A2E;
+  --surface: #1E1E32;
+  --surface2: #252540;
+  --border: rgba(255,255,255,0.08);
+  --border2: rgba(255,255,255,0.15);
+  --text: #F0F0FF;
+  --muted: rgba(240,240,255,0.5);
+  --muted2: rgba(240,240,255,0.25);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Space Grotesk', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
 
-/* ── Nav ── */
-.nav{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:52px;border-bottom:1px solid var(--border);background:var(--surface)}
-.nav-logo{display:flex;align-items:center;gap:10px}
-.nav-logo-icon{width:28px;height:28px;background:var(--blue);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:white}
-.nav-title{font-size:14px;font-weight:600;color:var(--text)}
-.nav-right{display:flex;align-items:center;gap:16px}
-.nav-badge{font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--border2);color:var(--muted)}
-.nav-link{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px}
-.nav-link:hover{color:var(--text);text-decoration:none}
-.nav-author{font-size:12px;color:var(--muted)}
+/* Animated background */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(108,59,255,0.15) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(255,59,139,0.1) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 90% 20%, rgba(0,212,255,0.08) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
 
-/* ── Main layout ── */
-.main{flex:1;display:flex;max-width:1100px;width:100%;margin:0 auto;padding:32px 24px;gap:28px}
-.left-col{flex:1;min-width:0}
-.right-col{width:320px;flex-shrink:0}
+/* Grid overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+}
 
-/* ── Upload panel ── */
-.panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.panel-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.panel-title{font-size:13px;font-weight:600;color:var(--text)}
-.panel-body{padding:20px}
+.wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 16px; }
 
-/* ── Drop zone ── */
-.drop-zone{border:1.5px dashed var(--border2);border-radius:8px;padding:36px 20px;text-align:center;cursor:pointer;transition:all 0.15s;background:var(--surface2)}
-.drop-zone:hover,.drop-zone.dragover{border-color:var(--blue);background:#1a2235}
-.drop-icon{width:40px;height:40px;margin:0 auto 12px;background:var(--surface);border:1px solid var(--border2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}
-.drop-title{font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px}
-.drop-sub{font-size:12px;color:var(--muted)}
-.drop-sub span{color:var(--blue)}
-#fileInput{display:none}
+/* Nav */
+nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: rgba(30,30,50,0.8);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  backdrop-filter: blur(20px);
+  margin-bottom: 20px;
+}
+.logo-icon {
+  width: 36px; height: 36px;
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; color: #fff;
+  flex-shrink: 0;
+}
+.logo-text { font-size: 15px; font-weight: 600; color: var(--text); }
+.logo-badge {
+  font-size: 10px; padding: 2px 8px;
+  background: rgba(108,59,255,0.2);
+  border: 1px solid rgba(108,59,255,0.4);
+  border-radius: 99px;
+  color: #A48FFF;
+  font-family: 'JetBrains Mono', monospace;
+}
+.nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.by-text { font-size: 12px; color: var(--muted); }
+.gh-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+  transition: all 0.2s;
+  font-family: inherit;
+  cursor: pointer;
+}
+.gh-btn:hover { border-color: var(--c1); color: var(--text); background: rgba(108,59,255,0.15); }
 
-/* ── File selected ── */
-.file-info{display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-top:12px;display:flex;align-items:center;gap:10px}
-.file-icon{width:32px;height:32px;background:#1a2235;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
-.file-name{font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.file-size{font-size:11px;color:var(--muted);margin-top:1px}
-.file-remove{margin-left:auto;cursor:pointer;color:var(--muted);font-size:16px;flex-shrink:0;line-height:1}
-.file-remove:hover{color:var(--red)}
+/* Main layout */
+.main { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
 
-/* ── Process button ── */
-.process-btn{width:100%;margin-top:14px;padding:10px;background:var(--blue);color:white;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.15s;display:flex;align-items:center;justify-content:center;gap:8px}
-.process-btn:hover{background:var(--blue2)}
-.process-btn:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;border:1px solid var(--border)}
-.process-btn .arrow{font-size:16px}
+/* Cards */
+.card {
+  background: rgba(30,30,50,0.6);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+.card-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.card-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: 0.02em; }
+.card-body { padding: 18px; }
 
-/* ── Progress ── */
-.progress-area{display:none;margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:14px}
-.progress-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.progress-label{font-size:12px;color:var(--muted)}
-.progress-pct{font-size:12px;font-weight:600;color:var(--blue)}
-.progress-bar-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden}
-.progress-bar-fill{height:100%;width:0;background:var(--blue);border-radius:2px;transition:width 0.3s}
-.progress-steps{margin-top:12px;display:flex;flex-direction:column;gap:6px}
-.step{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
-.step.active{color:var(--text)}
-.step.done{color:var(--green)}
-.step-dot{width:6px;height:6px;border-radius:50%;background:var(--border2);flex-shrink:0}
-.step.active .step-dot{background:var(--blue)}
-.step.done .step-dot{background:var(--green)}
+/* Drop zone */
+.dropzone {
+  border: 2px dashed var(--border2);
+  border-radius: 14px;
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+.dropzone::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(108,59,255,0.05), rgba(255,59,139,0.05));
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.dropzone:hover::before, .dropzone.dragover::before { opacity: 1; }
+.dropzone:hover, .dropzone.dragover {
+  border-color: var(--c1);
+  transform: scale(1.005);
+}
+.dz-orbit {
+  width: 72px; height: 72px;
+  margin: 0 auto 16px;
+  position: relative;
+}
+.dz-core {
+  width: 48px; height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(108,59,255,0.3), rgba(255,59,139,0.3));
+  border: 1px solid rgba(108,59,255,0.5);
+  display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  transition: transform 0.3s;
+  font-size: 22px;
+}
+.dropzone:hover .dz-core { transform: translate(-50%, -50%) scale(1.1); }
+.dz-ring {
+  position: absolute; inset: 0;
+  border: 1px solid rgba(108,59,255,0.2);
+  border-radius: 50%;
+  animation: spin 8s linear infinite;
+}
+.dz-ring::after {
+  content: '';
+  position: absolute; top: -3px; left: 50%;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--c1);
+  transform: translateX(-50%);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.dz-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.dz-sub { font-size: 13px; color: var(--muted); }
+.dz-sub span { color: #A48FFF; text-decoration: underline; }
+.format-pills { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.fpill {
+  font-size: 11px; padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border2);
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.2s;
+}
+.fpill:hover { border-color: var(--c3); color: var(--c3); }
 
-/* ── Error ── */
-.error-box{display:none;margin-top:12px;background:#2a1515;border:1px solid #5a2020;border-radius:7px;padding:12px 14px;font-size:12px;color:#f87171}
+/* File info */
+.file-info {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--border2);
+}
+.file-icon-wrap {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(108,59,255,0.3), rgba(0,212,255,0.2));
+  border: 1px solid rgba(108,59,255,0.4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.file-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-size { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+.remove-btn {
+  margin-left: auto; width: 28px; height: 28px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 16px; transition: all 0.2s; flex-shrink: 0;
+}
+.remove-btn:hover { background: rgba(255,59,139,0.15); border-color: var(--c2); color: var(--c2); }
 
-/* ── Results ── */
-.results{display:none;margin-top:20px}
-.result-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.result-title{font-size:13px;font-weight:600;color:var(--text)}
-.status-pill{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600}
-.status-ok{background:#0f2a1a;color:#4ade80;border:1px solid #1a4a2a}
-.status-warn{background:#2a2000;color:#fbbf24;border:1px solid #4a3800}
+/* Process button */
+.process-btn {
+  width: 100%; margin-top: 12px;
+  padding: 13px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+.process-btn::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+  opacity: 0; transition: opacity 0.2s;
+}
+.process-btn:hover::after { opacity: 1; }
+.process-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(108,59,255,0.4); }
+.process-btn:active { transform: scale(0.98); }
+.process-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
 
-/* ── Stats grid ── */
-.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
-.stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px;text-align:center}
-.stat-num{font-size:22px;font-weight:600;color:var(--text);line-height:1}
-.stat-lbl{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.3}
-.stat-card.ok .stat-num{color:var(--green)}
-.stat-card.warn .stat-num{color:var(--amber)}
-.stat-card.fail .stat-num{color:var(--red)}
+/* Progress */
+.progress-area { padding: 0; }
+.prog-steps { display: flex; gap: 6px; margin-bottom: 12px; }
+.step {
+  flex: 1; height: 4px;
+  border-radius: 99px;
+  background: var(--surface2);
+  transition: background 0.4s;
+}
+.step.done { background: linear-gradient(90deg, var(--c1), var(--c2)); }
+.step.active {
+  background: linear-gradient(90deg, var(--c1), var(--c3));
+  animation: stepglow 1s ease-in-out infinite;
+}
+@keyframes stepglow {
+  0%,100% { box-shadow: 0 0 8px rgba(108,59,255,0.6); }
+  50% { box-shadow: 0 0 16px rgba(0,212,255,0.8); }
+}
 
-/* ── Download cards ── */
-.dl-section-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px}
-.dl-card{display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px 14px;margin-bottom:8px;text-decoration:none;transition:border-color 0.15s,background 0.15s;cursor:pointer}
-.dl-card:hover{border-color:var(--border2);background:#1e1e1e;text-decoration:none}
-.dl-card-icon{width:34px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
-.dl-card-icon.txt{background:#1a2235;color:var(--blue)}
-.dl-card-icon.xml{background:#0f2a1a;color:var(--green)}
-.dl-card-icon.log{background:#2a2000;color:var(--amber)}
-.dl-card-body{flex:1;min-width:0}
-.dl-card-name{font-size:13px;font-weight:500;color:var(--text)}
-.dl-card-desc{font-size:11px;color:var(--muted);margin-top:1px}
-.dl-card-arrow{color:var(--muted);font-size:14px;flex-shrink:0}
-.dl-card:hover .dl-card-arrow{color:var(--text)}
+/* Wave animation */
+.wave-wrap {
+  height: 48px; position: relative; overflow: hidden;
+  margin: 12px 0;
+}
+.wave {
+  position: absolute; bottom: 0; left: -100%;
+  width: 300%; height: 100%;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 48'%3E%3Cpath d='M0,24 C150,0 300,48 450,24 C600,0 750,48 900,24 C1050,0 1200,48 1200,24 L1200,48 L0,48 Z' fill='rgba(108,59,255,0.15)'/%3E%3C/svg%3E") repeat-x;
+  animation: wave 2s linear infinite;
+}
+.wave2 {
+  position: absolute; bottom: 0; left: -100%;
+  width: 300%; height: 100%;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 48'%3E%3Cpath d='M0,32 C200,10 400,48 600,32 C800,16 1000,48 1200,32 L1200,48 L0,48 Z' fill='rgba(0,212,255,0.1)'/%3E%3C/svg%3E") repeat-x;
+  animation: wave 3s linear infinite reverse;
+}
+@keyframes wave { to { left: 0; } }
 
-/* ── Right sidebar ── */
-.info-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px}
-.info-card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px}
-.info-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
-.info-row:last-child{margin-bottom:0}
-.info-dot{width:6px;height:6px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:5px}
-.info-text{font-size:12px;color:var(--muted);line-height:1.5}
-.info-text strong{color:var(--text);font-weight:500}
-.engine-tag{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted);margin-bottom:6px;width:100%}
-.engine-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
-.built-by{text-align:center;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:11px;color:var(--muted)}
-.built-by strong{color:var(--text);font-weight:500}
+.prog-label {
+  font-size: 12px; color: var(--muted); text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+.prog-pct {
+  font-size: 24px; font-weight: 700; text-align: center;
+  background: linear-gradient(135deg, var(--c1), var(--c3));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 4px;
+}
+
+/* Live ticker */
+.ticker-wrap {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin: 8px 0;
+}
+.ticker-label { font-size: 11px; color: var(--muted); }
+.ticker-num {
+  font-size: 28px; font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  background: linear-gradient(135deg, var(--c5), var(--c3));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  min-width: 60px; text-align: center;
+  transition: transform 0.1s;
+}
+.ticker-unit { font-size: 11px; color: var(--muted); }
+
+/* Error box */
+.error-box {
+  display: none;
+  padding: 12px 14px;
+  background: rgba(255,59,139,0.1);
+  border: 1px solid rgba(255,59,139,0.3);
+  border-radius: 10px;
+  font-size: 13px;
+  color: #FF8FB5;
+  margin-top: 12px;
+}
+
+/* Results */
+.status-pill {
+  font-size: 11px; padding: 4px 12px;
+  border-radius: 99px;
+  font-weight: 600;
+}
+.status-ok { background: rgba(0,229,160,0.15); border: 1px solid rgba(0,229,160,0.4); color: var(--c5); }
+.status-warn { background: rgba(255,140,0,0.15); border: 1px solid rgba(255,140,0,0.4); color: var(--c4); }
+
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  transition: transform 0.2s;
+}
+.stat-card:hover { transform: translateY(-2px); }
+.stat-num { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+.stat-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.05em; text-transform: uppercase; }
+.stat-card.ok .stat-num { color: var(--c5); }
+.stat-card.warn .stat-num { color: var(--c4); }
+.stat-card.fail .stat-num { color: var(--c2); }
+
+/* Download cards */
+.dl-cards { display: flex; flex-direction: column; gap: 8px; }
+.dl-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-decoration: none;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.dl-card:hover {
+  border-color: var(--border2);
+  background: var(--surface2);
+  transform: translateX(3px);
+}
+.dl-icon {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.dl-icon.txt { background: rgba(0,229,160,0.15); color: var(--c5); border: 1px solid rgba(0,229,160,0.3); }
+.dl-icon.xml { background: rgba(108,59,255,0.15); color: #A48FFF; border: 1px solid rgba(108,59,255,0.3); }
+.dl-icon.log { background: rgba(255,140,0,0.15); color: var(--c4); border: 1px solid rgba(255,140,0,0.3); }
+.dl-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.dl-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.dl-arrow { margin-left: auto; color: var(--muted); font-size: 16px; transition: transform 0.2s; }
+.dl-card:hover .dl-arrow { transform: translateY(2px); color: var(--c3); }
+
+/* Sidebar */
+.engine-tag {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+}
+.edot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.edot.green { background: var(--c5); box-shadow: 0 0 6px var(--c5); }
+.edot.amber { background: var(--c4); }
+.engine-name { font-size: 12px; color: var(--muted); }
+
+.info-card { margin-bottom: 16px; }
+.info-card-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.info-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.info-row:last-child { border: none; }
+.info-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--c1); flex-shrink: 0; }
+.info-text { font-size: 12px; color: var(--muted); }
+.info-text strong { color: var(--text); font-weight: 600; }
+
+/* Reset btn */
+.reset-btn {
+  width: 100%; margin-top: 10px;
+  padding: 9px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.reset-btn:hover { border-color: var(--c2); color: var(--c2); background: rgba(255,59,139,0.05); }
+
+/* Built by */
+.built-by { font-size: 12px; color: var(--muted2); text-align: center; padding: 8px; }
+.built-by strong { color: var(--muted); }
+.built-by a { color: var(--c1); text-decoration: none; }
+
+/* Mobile */
+@media (max-width: 700px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { order: -1; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  nav .by-text, nav .logo-badge { display: none; }
+}
 </style>
 </head>
 <body>
+<div class="wrap">
 
-<nav class="nav">
-  <div class="nav-logo">
-    <div class="nav-logo-icon">M</div>
-    <span class="nav-title">MathMLtoTeXandAltText</span>
-    <span class="nav-badge">v1.0</span>
-  </div>
+<nav>
+  <div class="logo-icon">M</div>
+  <span class="logo-text">MathMLtoTeXandAltText</span>
+  <span class="logo-badge">v1.0</span>
   <div class="nav-right">
-    <span class="nav-author">by <strong style="color:var(--text)">Ambeth</strong></span>
-    <a class="nav-link" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
+    <span class="by-text">by <strong style="color:var(--text)">Ambeth</strong></span>
+    <a class="gh-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
       GitHub
     </a>
@@ -1892,155 +2214,170 @@ a:hover{text-decoration:underline}
 </nav>
 
 <div class="main">
-  <div class="left-col">
 
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Upload XML file</span>
-        <span style="font-size:11px;color:var(--muted)">.xml files only</span>
-      </div>
-      <div class="panel-body">
+<!-- LEFT COLUMN -->
+<div>
 
-        <div class="drop-zone" id="dropZone">
-          <div class="drop-icon">&#128196;</div>
-          <div class="drop-title">Drop your XML file here</div>
-          <div class="drop-sub">or <span>click to browse</span></div>
+  <!-- Upload Card -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-head">
+      <span class="card-title">Upload XML File</span>
+      <span style="font-size:11px;color:var(--muted)">.xml only</span>
+    </div>
+    <div class="card-body">
+
+      <!-- Drop zone -->
+      <div id="dropZone" class="dropzone">
+        <div class="dz-orbit">
+          <div class="dz-ring"></div>
+          <div class="dz-core">&#128196;</div>
         </div>
-        <input type="file" id="fileInput" accept=".xml">
+        <div class="dz-title">Drop your XML file here</div>
+        <div class="dz-sub">or <span>click to browse</span></div>
+        <div class="format-pills">
+          <span class="fpill">JATS/NLM</span>
+          <span class="fpill">Elsevier</span>
+          <span class="fpill">Springer</span>
+          <span class="fpill">TandF</span>
+          <span class="fpill">Bare math</span>
+        </div>
+        <input type="file" id="fileInput" accept=".xml" style="display:none">
+      </div>
 
-        <div class="file-info" id="fileInfo" style="display:none">
-          <div class="file-icon">&#128196;</div>
-          <div style="flex:1;min-width:0">
+      <!-- File selected -->
+      <div id="fileInfo" style="display:none">
+        <div class="file-info">
+          <div class="file-icon-wrap">&#128196;</div>
+          <div style="min-width:0;flex:1">
             <div class="file-name" id="fileName">—</div>
             <div class="file-size" id="fileSize">—</div>
           </div>
-          <div class="file-remove" onclick="removeFile()" title="Remove">&#215;</div>
+          <button class="remove-btn" onclick="removeFile()">&#215;</button>
         </div>
-
-        <button class="process-btn" id="processBtn" onclick="processFile()" disabled>
-          <span>Process file</span>
-          <span class="arrow">&#8594;</span>
+        <button class="process-btn" id="processBtn" disabled onclick="processFile()">
+          &#9654; Process Equations
         </button>
-
-        <div class="progress-area" id="progressArea">
-          <div class="progress-top">
-            <span class="progress-label" id="progressLabel">Uploading...</span>
-            <span class="progress-pct" id="progressPct">0%</span>
-          </div>
-          <div class="progress-bar-track">
-            <div class="progress-bar-fill" id="progressBar"></div>
-          </div>
-          <div class="progress-steps">
-            <div class="step" id="step1"><div class="step-dot"></div>Uploading XML file</div>
-            <div class="step" id="step2"><div class="step-dot"></div>Parsing MathML equations</div>
-            <div class="step" id="step3"><div class="step-dot"></div>Converting to TeX via WIRIS</div>
-            <div class="step" id="step4"><div class="step-dot"></div>Generating Alt Text</div>
-            <div class="step" id="step5"><div class="step-dot"></div>Writing output files</div>
-          </div>
-        </div>
-
-        <div class="error-box" id="errorBox"></div>
-
       </div>
-    </div>
 
-    <div class="results" id="results">
-      <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Results</span>
-          <div id="statusPill"></div>
+      <!-- Progress -->
+      <div id="progressArea" style="display:none">
+        <div class="prog-steps">
+          <div class="step" id="step1"></div>
+          <div class="step" id="step2"></div>
+          <div class="step" id="step3"></div>
+          <div class="step" id="step4"></div>
+          <div class="step" id="step5"></div>
         </div>
-        <div class="panel-body">
-          <div class="stats-grid" id="statsGrid"></div>
-          <div class="dl-section-title">Output files</div>
-          <div id="dlCards"></div>
-          <button onclick="resetForm()" style="width:100%;margin-top:8px;padding:9px;background:transparent;border:1px solid var(--border2);border-radius:7px;color:var(--muted);font-size:12px;cursor:pointer">
-            &#8592; Process another file
-          </button>
+        <div class="wave-wrap"><div class="wave"></div><div class="wave2"></div></div>
+        <!-- Live equation ticker -->
+        <div class="ticker-wrap" id="tickerArea" style="display:none">
+          <span class="ticker-label">equations found</span>
+          <span class="ticker-num" id="tickerNum">0</span>
+          <span class="ticker-unit">&#8593;</span>
         </div>
+        <div class="prog-pct" id="progressPct">0%</div>
+        <div class="prog-label" id="progressLabel">Connecting...</div>
       </div>
-    </div>
 
+      <!-- Error -->
+      <div id="errorBox" class="error-box"></div>
+
+    </div>
   </div>
 
-  <div class="right-col">
-
-    <div class="info-card">
-      <div class="info-card-title">Conversion engines</div>
-      <div class="engine-tag"><div class="engine-dot"></div>WIRIS / MathType API — primary</div>
-      <div class="engine-tag" style="opacity:0.6"><div class="engine-dot" style="background:var(--amber)"></div>mathml-to-latex — fallback</div>
+  <!-- Results Card -->
+  <div class="card" id="results" style="display:none">
+    <div class="card-head">
+      <span class="card-title">Results</span>
+      <span id="statusPill"></span>
     </div>
-
-    <div class="info-card">
-      <div class="info-card-title">Supported formats</div>
-      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS / NLM</strong> — inline-formula, disp-formula</div></div>
-      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>Springer</strong> — InlineEquation, Equation</div></div>
-      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>HTML span</strong> — span.inline / span.display</div></div>
-      <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>Bare</strong> — any math tag (fallback)</div></div>
+    <div class="card-body">
+      <div class="stats-grid" id="statsGrid"></div>
+      <div class="dl-cards" id="dlCards"></div>
+      <button class="reset-btn" onclick="resetForm()">&#8592; Process another file</button>
     </div>
-
-    <div class="info-card">
-      <div class="info-card-title">Output files</div>
-      <div class="info-row"><div class="info-dot" style="background:var(--blue)"></div><div class="info-text"><strong>TXT</strong> — TeX, AltText, MathML per equation</div></div>
-      <div class="info-row"><div class="info-dot" style="background:var(--green)"></div><div class="info-text"><strong>XML</strong> — modified XML with tex="" alttext="" added to img tags</div></div>
-      <div class="info-row"><div class="info-dot" style="background:var(--amber)"></div><div class="info-text"><strong>LOG</strong> — processing log with complexity analysis</div></div>
-    </div>
-
-    <div class="built-by">
-      Built by <strong>Ambeth</strong> &#183;
-      <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank" style="color:var(--blue)">GitHub</a>
-    </div>
-
   </div>
+
+</div>
+
+<!-- RIGHT SIDEBAR -->
+<div class="sidebar">
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-head"><span class="card-title">TeX Engine</span></div>
+    <div class="card-body">
+      <div class="engine-tag">
+        <div class="edot green"></div>
+        <span class="engine-name">WIRIS/MathType API — primary</span>
+      </div>
+      <div class="engine-tag" style="opacity:0.6">
+        <div class="edot amber"></div>
+        <span class="engine-name">mathml-to-latex — fallback</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-body">
+      <div class="info-card">
+        <div class="info-card-title">Supported Formats</div>
+        <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS/NLM</strong> — inline-formula, disp-formula</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c2)"></div><div class="info-text"><strong>Elsevier</strong> — ce:inline-formula, ce:disp-formula</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c3)"></div><div class="info-text"><strong>Springer</strong> — InlineEquation, Equation</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>Bare math</strong> — any &lt;math&gt; tag</div></div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-title">Output Files</div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c5)"></div><div class="info-text"><strong>TXT</strong> — TeX + AltText + MathML</div></div>
+        <div class="info-row"><div class="info-dot" style="background:#A48FFF"></div><div class="info-text"><strong>XML</strong> — modified with tex="" alttext=""</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>LOG</strong> — complexity analysis</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="built-by">
+    Built by <strong>Ambeth</strong> &nbsp;&middot;&nbsp;
+    <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">GitHub</a>
+  </div>
+
+</div>
+</div>
 </div>
 
 <script>
-  // ── Simple, reliable file handling ──────────────────────────
   var selectedFile = null;
 
-  // Block browser from opening dropped files on the page
+  // Block browser from opening XML files dropped on page
   document.addEventListener('dragover', function(e) { e.preventDefault(); });
-  document.addEventListener('drop', function(e) { e.preventDefault(); });
+  document.addEventListener('drop',     function(e) { e.preventDefault(); });
 
   // Drop zone
   var dz = document.getElementById('dropZone');
-  dz.addEventListener('dragover', function(e) {
-    e.preventDefault(); e.stopPropagation();
-    dz.classList.add('dragover');
+  dz.addEventListener('dragover',  function(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', function(e){ e.stopPropagation(); dz.classList.remove('dragover'); });
+  dz.addEventListener('drop', function(e){
+    e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
+    var f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) handleFile(f);
   });
-  dz.addEventListener('dragleave', function(e) {
-    e.stopPropagation();
-    dz.classList.remove('dragover');
-  });
-  dz.addEventListener('drop', function(e) {
-    e.preventDefault(); e.stopPropagation();
-    dz.classList.remove('dragover');
-    var f = e.dataTransfer.files[0];
-    if (f) setFile(f);
-  });
-  dz.addEventListener('click', function() {
-    document.getElementById('fileInput').click();
+  dz.addEventListener('click', function(){ document.getElementById('fileInput').click(); });
+  document.getElementById('fileInput').addEventListener('change', function(){
+    if (this.files[0]) handleFile(this.files[0]);
   });
 
-  // Browse button
-  document.getElementById('fileInput').addEventListener('change', function() {
-    if (this.files[0]) setFile(this.files[0]);
-  });
-
-  function setFile(f) {
-    if (!f.name.toLowerCase().endsWith('.xml')) {
-      showError('Please select an .xml file.');
-      return;
-    }
+  function handleFile(f) {
+    if (!f.name.toLowerCase().endsWith('.xml')) { showError('Please select an .xml file.'); return; }
     selectedFile = f;
     document.getElementById('fileName').textContent = f.name;
-    document.getElementById('fileSize').textContent = (f.size / 1024).toFixed(1) + ' KB';
-    document.getElementById('fileInfo').style.display = 'flex';
+    document.getElementById('fileSize').textContent = (f.size/1024).toFixed(1) + ' KB';
+    document.getElementById('fileInfo').style.display = 'block';
     document.getElementById('dropZone').style.display = 'none';
     document.getElementById('processBtn').disabled = false;
     document.getElementById('errorBox').style.display = 'none';
     document.getElementById('results').style.display = 'none';
   }
+
+  function setFile(f) { handleFile(f); }
 
   function removeFile() {
     selectedFile = null;
@@ -2054,62 +2391,88 @@ a:hover{text-decoration:underline}
     removeFile();
     document.getElementById('results').style.display = 'none';
     document.getElementById('progressArea').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'none';
   }
 
-  // ── Progress bar ────────────────────────────────────────────
-  var progTimer = null;
+  // Progress
+  var progTimer = null, progPct = 0, progStep = 0;
+  var stepIds   = ['step1','step2','step3','step4','step5'];
+  var stepLabels = ['Connecting...','Parsing XML...','Converting via WIRIS...','Generating AltText...','Writing outputs...'];
+  var stepTargets = [10, 30, 70, 88, 96];
 
   function startProgress() {
-    var steps   = ['step1','step2','step3','step4','step5'];
-    var labels  = ['Uploading...','Parsing MathML...','Converting via WIRIS (may take a minute for large files)...','Generating AltText...','Writing outputs...'];
-    var targets = [15, 35, 65, 85, 95];
-    var cur = 0, pct = 0;
-
+    progPct = 0; progStep = 0;
     document.getElementById('progressArea').style.display = 'block';
-    steps.forEach(function(s) { document.getElementById(s).className = 'step'; });
-
-    // Slow progress bar — WIRIS can take 1-3s per equation
-    // Progress intentionally stays at 85% during WIRIS processing
-    progTimer = setInterval(function() {
-      if (cur < steps.length) {
-        document.getElementById(steps[cur]).className = 'step active';
-        document.getElementById('progressLabel').textContent = labels[cur];
-        if (pct < targets[cur]) {
-          // Slow down at step 3 (WIRIS) to avoid completing too early
-          var speed = cur === 2 ? 0.3 : 2;
-          pct = Math.min(pct + speed, targets[cur]);
-          document.getElementById('progressBar').style.width = pct + '%';
-          document.getElementById('progressPct').textContent = Math.round(pct) + '%';
-        } else { cur++; }
+    document.getElementById('fileInfo').style.display = 'none';
+    document.getElementById('tickerArea').style.display = 'none';
+    stepIds.forEach(function(s){ document.getElementById(s).className='step'; });
+    document.getElementById('progressPct').textContent = '0%';
+    document.getElementById('progressLabel').textContent = 'Connecting...';
+    // Animate ticker during WIRIS step
+    var tickerVal = 0;
+    progTimer = setInterval(function(){
+      if (progStep < stepIds.length) {
+        document.getElementById(stepIds[progStep]).className = 'step active';
+        document.getElementById('progressLabel').textContent = stepLabels[progStep];
+        // Show ticker during conversion step
+        if (progStep === 2) {
+          document.getElementById('tickerArea').style.display = 'flex';
+          if (tickerVal < 43) {
+            tickerVal += Math.floor(Math.random()*3)+1;
+            if (tickerVal > 43) tickerVal = 43;
+            var el = document.getElementById('tickerNum');
+            el.textContent = tickerVal;
+            el.style.transform = 'scale(1.2)';
+            setTimeout(function(){ el.style.transform='scale(1)'; }, 100);
+          }
+        }
+        if (progPct < stepTargets[progStep]) {
+          var speed = progStep === 2 ? 0.4 : 2;
+          progPct = Math.min(progPct + speed, stepTargets[progStep]);
+          document.getElementById('progressPct').textContent = Math.round(progPct) + '%';
+        } else {
+          progStep++;
+        }
       }
     }, 120);
   }
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
-    var steps = ['step1','step2','step3','step4','step5'];
-    steps.forEach(function(s) { document.getElementById(s).className = 'step done'; });
-    document.getElementById('progressBar').style.width = '100%';
+    stepIds.forEach(function(s){ document.getElementById(s).className='step done'; });
     document.getElementById('progressPct').textContent = '100%';
     document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
-    setTimeout(function() {
-      document.getElementById('progressArea').style.display = 'none';
-    }, 800);
+    document.getElementById('tickerArea').style.display = 'none';
+    setTimeout(function(){ document.getElementById('progressArea').style.display='none'; }, 900);
   }
 
-  // ── Process file ────────────────────────────────────────────
+  function showError(msg) {
+    var box = document.getElementById('errorBox');
+    box.textContent = '\u26a0 ' + msg;
+    box.style.display = 'block';
+    document.getElementById('processBtn').disabled = false;
+  }
+
   function processFile() {
     if (!selectedFile) return;
     document.getElementById('processBtn').disabled = true;
     document.getElementById('results').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
-    document.getElementById('progressLabel').textContent = 'Connecting...';
-
-    // Wake server first — Render free tier takes ~60s to wake from sleep
-    // Keep pinging /health until it responds, then upload
-    document.getElementById('progressLabel').textContent = 'Waking server (may take ~30s on first use)...';
+    document.getElementById('progressLabel').textContent = 'Waking server...';
     wakeServer(0);
+  }
+
+  function sc(num, label, cls) {
+    return '<div class="stat-card ' + cls + '"><div class="stat-num">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
+  }
+  function dlCard(text, filename, iconClass, icon, name, desc) {
+    var blob = new Blob([text], { type:'text/plain;charset=utf-8' });
+    var url  = URL.createObjectURL(blob);
+    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
+      '<div class="dl-icon '+iconClass+'">'+icon+'</div>' +
+      '<div><div class="dl-name">'+name+'</div><div class="dl-desc">'+desc+'</div></div>' +
+      '<div class="dl-arrow">&#8595;</div></a>';
   }
 
   function wakeServer(attempts) {
@@ -2261,26 +2624,6 @@ a:hover{text-decoration:underline}
     };
     reader.readAsText(selectedFile);
   } // end sendFile
-
-  function sc(num, label, cls) {
-    return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
-  }
-
-  function dlCard(text, filename, iconClass, icon, name, desc) {
-    var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    var url  = URL.createObjectURL(blob);
-    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
-      '<div class="dl-card-icon '+iconClass+'">'+icon+'</div>' +
-      '<div class="dl-card-body"><div class="dl-card-name">'+name+'</div><div class="dl-card-desc">'+desc+'</div></div>' +
-      '<div class="dl-card-arrow">&#8595;</div></a>';
-  }
-
-  function showError(msg) {
-    var box = document.getElementById('errorBox');
-    box.textContent = '\u26a0 ' + msg;
-    box.style.display = 'block';
-    document.getElementById('processBtn').disabled = false;
-  }
 </script>
 </body>
 </html>`);
