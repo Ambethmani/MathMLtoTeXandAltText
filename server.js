@@ -1849,478 +1849,183 @@ app.get("/ui", (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MathMLtoTeXandAltText</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root {
-  --c1: #6C3BFF;
-  --c2: #FF3B8B;
-  --c3: #00D4FF;
-  --c4: #FF8C00;
-  --c5: #00E5A0;
-  --bg: #0A0A12;
-  --bg2: #12121E;
-  --bg3: #1A1A2E;
-  --surface: #1E1E32;
-  --surface2: #252540;
-  --border: rgba(255,255,255,0.08);
-  --border2: rgba(255,255,255,0.15);
-  --text: #F0F0FF;
-  --muted: rgba(240,240,255,0.5);
-  --muted2: rgba(240,240,255,0.25);
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: 'Space Grotesk', sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  overflow-x: hidden;
-}
-
-/* Animated background */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(108,59,255,0.15) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(255,59,139,0.1) 0%, transparent 60%),
-    radial-gradient(ellipse 50% 60% at 90% 20%, rgba(0,212,255,0.08) 0%, transparent 50%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* Grid overlay */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-  background-size: 48px 48px;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 16px; }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;color:#1a2f45;min-height:100vh}
 
 /* Nav */
-nav {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  background: rgba(30,30,50,0.8);
-  border: 1px solid var(--border2);
-  border-radius: 16px;
-  backdrop-filter: blur(20px);
-  margin-bottom: 20px;
-}
-.logo-icon {
-  width: 36px; height: 36px;
-  background: linear-gradient(135deg, var(--c1), var(--c2));
-  border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; font-weight: 700; color: #fff;
-  flex-shrink: 0;
-}
-.logo-text { font-size: 15px; font-weight: 600; color: var(--text); }
-.logo-badge {
-  font-size: 10px; padding: 2px 8px;
-  background: rgba(108,59,255,0.2);
-  border: 1px solid rgba(108,59,255,0.4);
-  border-radius: 99px;
-  color: #A48FFF;
-  font-family: 'JetBrains Mono', monospace;
-}
-.nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-.by-text { font-size: 12px; color: var(--muted); }
-.gh-btn {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  text-decoration: none;
-  transition: all 0.2s;
-  font-family: inherit;
-  cursor: pointer;
-}
-.gh-btn:hover { border-color: var(--c1); color: var(--text); background: rgba(108,59,255,0.15); }
+nav{background:linear-gradient(135deg,#0f4c75 0%,#1b6ca8 100%);padding:0 24px;height:56px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(15,76,117,0.3)}
+.logo{width:34px;height:34px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px;flex-shrink:0}
+.nav-title{color:#fff;font-size:14px;font-weight:600;letter-spacing:-0.01em}
+.nav-badge{font-size:10px;padding:2px 8px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:99px;color:rgba(255,255,255,0.65);font-family:'JetBrains Mono',monospace}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.nav-by{font-size:12px;color:rgba(255,255,255,0.55)}
+.nav-by strong{color:rgba(255,255,255,0.9)}
+.nav-btn{font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.75);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:6px;text-decoration:none;font-family:inherit}
+.nav-btn:hover{background:rgba(255,255,255,0.16);border-color:rgba(255,255,255,0.35);color:#fff}
 
-/* Main layout */
-.main { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
+/* Layout */
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px}
+.grid{display:grid;grid-template-columns:1fr 290px;gap:16px}
 
 /* Cards */
-.card {
-  background: rgba(30,30,50,0.6);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  backdrop-filter: blur(10px);
-  overflow: hidden;
-}
-.card-head {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-}
-.card-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: 0.02em; }
-.card-body { padding: 18px; }
+.card{background:#fff;border:1px solid #dde3ec;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(15,76,117,0.06)}
+.card+.card{margin-top:14px}
+.card-head{padding:13px 18px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;background:#f8fafd}
+.card-title{font-size:11px;font-weight:600;color:#5c7a9c;text-transform:uppercase;letter-spacing:0.07em}
+.card-meta{font-size:11px;color:#94b0c8}
+.card-body{padding:18px}
 
 /* Drop zone */
-.dropzone {
-  border: 2px dashed var(--border2);
-  border-radius: 14px;
-  padding: 40px 24px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.3s;
-  position: relative;
-  overflow: hidden;
-}
-.dropzone::before {
-  content: '';
-  position: absolute; inset: 0;
-  background: linear-gradient(135deg, rgba(108,59,255,0.05), rgba(255,59,139,0.05));
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-.dropzone:hover::before, .dropzone.dragover::before { opacity: 1; }
-.dropzone:hover, .dropzone.dragover {
-  border-color: var(--c1);
-  transform: scale(1.005);
-}
-.dz-orbit {
-  width: 72px; height: 72px;
-  margin: 0 auto 16px;
-  position: relative;
-}
-.dz-core {
-  width: 48px; height: 48px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(108,59,255,0.3), rgba(255,59,139,0.3));
-  border: 1px solid rgba(108,59,255,0.5);
-  display: flex; align-items: center; justify-content: center;
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  transition: transform 0.3s;
-  font-size: 22px;
-}
-.dropzone:hover .dz-core { transform: translate(-50%, -50%) scale(1.1); }
-.dz-ring {
-  position: absolute; inset: 0;
-  border: 1px solid rgba(108,59,255,0.2);
-  border-radius: 50%;
-  animation: spin 8s linear infinite;
-}
-.dz-ring::after {
-  content: '';
-  position: absolute; top: -3px; left: 50%;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--c1);
-  transform: translateX(-50%);
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.dz-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
-.dz-sub { font-size: 13px; color: var(--muted); }
-.dz-sub span { color: #A48FFF; text-decoration: underline; }
-.format-pills { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
-.fpill {
-  font-size: 11px; padding: 4px 10px;
-  border-radius: 99px;
-  border: 1px solid var(--border2);
-  color: var(--muted);
-  font-family: 'JetBrains Mono', monospace;
-  transition: all 0.2s;
-}
-.fpill:hover { border-color: var(--c3); color: var(--c3); }
+.dropzone{border:2px dashed #c8d8ea;border-radius:10px;padding:36px 20px;text-align:center;cursor:pointer;background:#f8fafd;transition:all 0.2s;position:relative}
+.dropzone:hover,.dropzone.dragover{border-color:#1b6ca8;background:#eef5fc}
+.dropzone:hover .dz-icon{transform:translateY(-3px);background:#e0eefa;border-color:#9ec5e8}
+.dz-icon{width:48px;height:48px;background:#eef5fc;border:1px solid #c8d8ea;border-radius:12px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;transition:all 0.2s}
+.dz-title{font-size:14px;font-weight:600;color:#1a2f45;margin-bottom:5px}
+.dz-sub{font-size:12px;color:#5c7a9c}
+.dz-sub span{color:#1b6ca8;cursor:pointer}
+.format-pills{display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+.fpill{font-size:10px;padding:3px 9px;border-radius:99px;background:#eef5fc;color:#1b6ca8;border:1px solid #c8d8ea;font-weight:500;transition:all 0.15s}
+.fpill:hover{background:#1b6ca8;color:#fff;border-color:#1b6ca8}
 
-/* File info */
-.file-info {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px;
-  background: var(--surface);
-  border-radius: 12px;
-  border: 1px solid var(--border2);
-}
-.file-icon-wrap {
-  width: 40px; height: 40px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, rgba(108,59,255,0.3), rgba(0,212,255,0.2));
-  border: 1px solid rgba(108,59,255,0.4);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; flex-shrink: 0;
-}
-.file-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-size { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
-.remove-btn {
-  margin-left: auto; width: 28px; height: 28px;
-  border-radius: 8px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  font-size: 16px; transition: all 0.2s; flex-shrink: 0;
-}
-.remove-btn:hover { background: rgba(255,59,139,0.15); border-color: var(--c2); color: var(--c2); }
+/* File box */
+.file-box{display:flex;align-items:center;gap:12px;padding:13px 14px;background:#f8fafd;border-radius:10px;border:1px solid #dde3ec}
+.file-icon{width:38px;height:38px;border-radius:9px;background:#eef5fc;border:1px solid #c8d8ea;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.file-name{font-size:13px;font-weight:600;color:#1a2f45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-size{font-size:11px;color:#5c7a9c;font-family:'JetBrains Mono',monospace;margin-top:1px}
+.remove-btn{margin-left:auto;width:26px;height:26px;border-radius:7px;background:transparent;border:1px solid #dde3ec;color:#94b0c8;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all 0.15s;flex-shrink:0}
+.remove-btn:hover{background:#fff0f3;border-color:#f8a0b4;color:#e05577}
 
 /* Process button */
-.process-btn {
-  width: 100%; margin-top: 12px;
-  padding: 13px;
-  border-radius: 12px;
-  border: none;
-  background: linear-gradient(135deg, var(--c1), var(--c2));
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.2s;
-  position: relative;
-  overflow: hidden;
-}
-.process-btn::after {
-  content: '';
-  position: absolute; inset: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
-  opacity: 0; transition: opacity 0.2s;
-}
-.process-btn:hover::after { opacity: 1; }
-.process-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(108,59,255,0.4); }
-.process-btn:active { transform: scale(0.98); }
-.process-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+.process-btn{width:100%;margin-top:12px;padding:11px;border-radius:9px;border:none;background:#1b6ca8;color:#fff;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:8px}
+.process-btn:hover{background:#0f4c75;box-shadow:0 4px 12px rgba(27,108,168,0.3)}
+.process-btn:active{transform:scale(0.98)}
+.process-btn:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none;transform:none}
 
 /* Progress */
-.progress-area { padding: 0; }
-.prog-steps { display: flex; gap: 6px; margin-bottom: 12px; }
-.step {
-  flex: 1; height: 4px;
-  border-radius: 99px;
-  background: var(--surface2);
-  transition: background 0.4s;
-}
-.step.done { background: linear-gradient(90deg, var(--c1), var(--c2)); }
-.step.active {
-  background: linear-gradient(90deg, var(--c1), var(--c3));
-  animation: stepglow 1s ease-in-out infinite;
-}
-@keyframes stepglow {
-  0%,100% { box-shadow: 0 0 8px rgba(108,59,255,0.6); }
-  50% { box-shadow: 0 0 16px rgba(0,212,255,0.8); }
-}
+.prog-wrap{padding:4px 0}
+.prog-steps{display:flex;gap:5px;margin-bottom:14px}
+.step{flex:1;height:3px;border-radius:99px;background:#e8eef5;transition:background 0.4s}
+.step.done{background:#1b6ca8}
+.step.active{background:#5aabde;animation:stepblink 1s ease-in-out infinite}
+@keyframes stepblink{0%,100%{opacity:1}50%{opacity:0.45}}
+.prog-pct{font-size:26px;font-weight:700;color:#0f4c75;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:-0.02em}
+.prog-label{font-size:12px;color:#5c7a9c;text-align:center;margin-top:4px}
 
-/* Wave animation */
-.wave-wrap {
-  height: 48px; position: relative; overflow: hidden;
-  margin: 12px 0;
-}
-.wave {
-  position: absolute; bottom: 0; left: -100%;
-  width: 300%; height: 100%;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 48'%3E%3Cpath d='M0,24 C150,0 300,48 450,24 C600,0 750,48 900,24 C1050,0 1200,48 1200,24 L1200,48 L0,48 Z' fill='rgba(108,59,255,0.15)'/%3E%3C/svg%3E") repeat-x;
-  animation: wave 2s linear infinite;
-}
-.wave2 {
-  position: absolute; bottom: 0; left: -100%;
-  width: 300%; height: 100%;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 48'%3E%3Cpath d='M0,32 C200,10 400,48 600,32 C800,16 1000,48 1200,32 L1200,48 L0,48 Z' fill='rgba(0,212,255,0.1)'/%3E%3C/svg%3E") repeat-x;
-  animation: wave 3s linear infinite reverse;
-}
-@keyframes wave { to { left: 0; } }
+/* Wave */
+.wave-wrap{height:40px;overflow:hidden;margin:10px 0;border-radius:8px;background:#f0f7ff}
+.wave-inner{height:100%;display:flex;align-items:flex-end}
+.wave-bar{flex:1;background:#1b6ca8;border-radius:2px 2px 0 0;animation:wavebar 1.2s ease-in-out infinite}
+.wave-bar:nth-child(2){animation-delay:0.1s;opacity:0.8}
+.wave-bar:nth-child(3){animation-delay:0.2s;opacity:0.9}
+.wave-bar:nth-child(4){animation-delay:0.3s;opacity:0.7}
+.wave-bar:nth-child(5){animation-delay:0.4s;opacity:0.85}
+.wave-bar:nth-child(6){animation-delay:0.15s;opacity:0.75}
+.wave-bar:nth-child(7){animation-delay:0.25s;opacity:0.9}
+.wave-bar:nth-child(8){animation-delay:0.35s;opacity:0.8}
+@keyframes wavebar{0%,100%{height:30%}50%{height:85%}}
 
-.prog-label {
-  font-size: 12px; color: var(--muted); text-align: center;
-  font-family: 'JetBrains Mono', monospace;
-}
-.prog-pct {
-  font-size: 24px; font-weight: 700; text-align: center;
-  background: linear-gradient(135deg, var(--c1), var(--c3));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 4px;
-}
+/* Ticker */
+.ticker-wrap{display:flex;align-items:center;justify-content:center;gap:6px;margin:8px 0}
+.ticker-label{font-size:11px;color:#5c7a9c}
+.ticker-num{font-size:28px;font-weight:700;color:#0f4c75;font-family:'JetBrains Mono',monospace;min-width:52px;text-align:center;transition:transform 0.1s}
+.ticker-unit{font-size:11px;color:#5c7a9c}
 
-/* Live ticker */
-.ticker-wrap {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  margin: 8px 0;
-}
-.ticker-label { font-size: 11px; color: var(--muted); }
-.ticker-num {
-  font-size: 28px; font-weight: 700;
-  font-family: 'JetBrains Mono', monospace;
-  background: linear-gradient(135deg, var(--c5), var(--c3));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  background-clip: text;
-  min-width: 60px; text-align: center;
-  transition: transform 0.1s;
-}
-.ticker-unit { font-size: 11px; color: var(--muted); }
+/* Error */
+.error-box{display:none;padding:11px 14px;background:#fff5f7;border:1px solid #f8a0b4;border-radius:9px;font-size:13px;color:#c0395a;margin-top:12px}
 
-/* Error box */
-.error-box {
-  display: none;
-  padding: 12px 14px;
-  background: rgba(255,59,139,0.1);
-  border: 1px solid rgba(255,59,139,0.3);
-  border-radius: 10px;
-  font-size: 13px;
-  color: #FF8FB5;
-  margin-top: 12px;
-}
+/* Status pill */
+.status-pill{font-size:11px;padding:3px 10px;border-radius:99px;font-weight:600}
+.status-ok{background:#e8f7ef;border:1px solid #a8dfc0;color:#1a7a46}
+.status-warn{background:#fef7e8;border:1px solid #f0d090;color:#8a5c00}
 
-/* Results */
-.status-pill {
-  font-size: 11px; padding: 4px 12px;
-  border-radius: 99px;
-  font-weight: 600;
-}
-.status-ok { background: rgba(0,229,160,0.15); border: 1px solid rgba(0,229,160,0.4); color: var(--c5); }
-.status-warn { background: rgba(255,140,0,0.15); border: 1px solid rgba(255,140,0,0.4); color: var(--c4); }
-
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-.stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  text-align: center;
-  transition: transform 0.2s;
-}
-.stat-card:hover { transform: translateY(-2px); }
-.stat-num { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
-.stat-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.05em; text-transform: uppercase; }
-.stat-card.ok .stat-num { color: var(--c5); }
-.stat-card.warn .stat-num { color: var(--c4); }
-.stat-card.fail .stat-num { color: var(--c2); }
+/* Stats */
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.stat-card{background:#f8fafd;border:1px solid #dde3ec;border-radius:9px;padding:11px;text-align:center}
+.stat-num{font-size:22px;font-weight:700;color:#0f4c75;font-family:'JetBrains Mono',monospace}
+.stat-num.ok{color:#1a7a46}
+.stat-num.warn{color:#8a5c00}
+.stat-num.fail{color:#c0395a}
+.stat-lbl{font-size:10px;color:#5c7a9c;margin-top:2px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500}
 
 /* Download cards */
-.dl-cards { display: flex; flex-direction: column; gap: 8px; }
-.dl-card {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  text-decoration: none;
-  transition: all 0.2s;
-  cursor: pointer;
-}
-.dl-card:hover {
-  border-color: var(--border2);
-  background: var(--surface2);
-  transform: translateX(3px);
-}
-.dl-icon {
-  width: 36px; height: 36px;
-  border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700;
-  flex-shrink: 0;
-  font-family: 'JetBrains Mono', monospace;
-}
-.dl-icon.txt { background: rgba(0,229,160,0.15); color: var(--c5); border: 1px solid rgba(0,229,160,0.3); }
-.dl-icon.xml { background: rgba(108,59,255,0.15); color: #A48FFF; border: 1px solid rgba(108,59,255,0.3); }
-.dl-icon.log { background: rgba(255,140,0,0.15); color: var(--c4); border: 1px solid rgba(255,140,0,0.3); }
-.dl-name { font-size: 13px; font-weight: 600; color: var(--text); }
-.dl-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
-.dl-arrow { margin-left: auto; color: var(--muted); font-size: 16px; transition: transform 0.2s; }
-.dl-card:hover .dl-arrow { transform: translateY(2px); color: var(--c3); }
+.dl-cards{display:flex;flex-direction:column;gap:8px}
+.dl-card{display:flex;align-items:center;gap:13px;padding:12px 14px;background:#f8fafd;border:1px solid #dde3ec;border-radius:10px;text-decoration:none;transition:all 0.15s;cursor:pointer}
+.dl-card:hover{background:#eef5fc;border-color:#9ec5e8;transform:translateX(3px)}
+.dl-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;font-family:'JetBrains Mono',monospace}
+.dl-icon.txt{background:#e8f7ef;color:#1a7a46;border:1px solid #a8dfc0}
+.dl-icon.xml{background:#eef5fc;color:#1b6ca8;border:1px solid #9ec5e8}
+.dl-icon.log{background:#fef7e8;color:#8a5c00;border:1px solid #f0d090}
+.dl-name{font-size:13px;font-weight:600;color:#1a2f45}
+.dl-desc{font-size:11px;color:#5c7a9c;margin-top:1px}
+.dl-arrow{margin-left:auto;color:#94b0c8;font-size:14px;transition:transform 0.15s}
+.dl-card:hover .dl-arrow{transform:translateY(2px);color:#1b6ca8}
 
-/* Sidebar */
-.engine-tag {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px;
-  background: var(--surface);
-  border-radius: 8px;
-  margin-bottom: 6px;
-  border: 1px solid var(--border);
-}
-.edot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.edot.green { background: var(--c5); box-shadow: 0 0 6px var(--c5); }
-.edot.amber { background: var(--c4); }
-.engine-name { font-size: 12px; color: var(--muted); }
+/* Reset */
+.reset-btn{width:100%;margin-top:10px;padding:9px;background:transparent;border:1px solid #dde3ec;border-radius:9px;color:#5c7a9c;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.15s}
+.reset-btn:hover{border-color:#c8d8ea;color:#1b6ca8;background:#f8fafd}
 
-.info-card { margin-bottom: 16px; }
-.info-card-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-.info-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-.info-row:last-child { border: none; }
-.info-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--c1); flex-shrink: 0; }
-.info-text { font-size: 12px; color: var(--muted); }
-.info-text strong { color: var(--text); font-weight: 600; }
+/* Sidebar widgets */
+.engine-row{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#f8fafd;border:1px solid #dde3ec;border-radius:8px;margin-bottom:6px}
+.edot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.edot.live{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.15)}
+.edot.fallback{background:#f59e0b}
+.engine-name{font-size:12px;color:#1a2f45;font-weight:500}
+.engine-sub{font-size:10px;color:#94b0c8;margin-top:1px}
 
-/* Reset btn */
-.reset-btn {
-  width: 100%; margin-top: 10px;
-  padding: 9px;
-  background: transparent;
-  border: 1px solid var(--border2);
-  border-radius: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.reset-btn:hover { border-color: var(--c2); color: var(--c2); background: rgba(255,59,139,0.05); }
+.info-section{margin-bottom:4px}
+.info-label{font-size:10px;font-weight:600;color:#94b0c8;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;padding:0 2px}
+.info-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #eef2f7}
+.info-row:last-child{border:none}
+.info-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.info-text{font-size:12px;color:#1a2f45}
+.info-text span{color:#5c7a9c;font-size:11px;display:block;margin-top:1px}
 
-/* Built by */
-.built-by { font-size: 12px; color: var(--muted2); text-align: center; padding: 8px; }
-.built-by strong { color: var(--muted); }
-.built-by a { color: var(--c1); text-decoration: none; }
+.built-by{text-align:center;font-size:11px;color:#94b0c8;padding:8px 0}
+.built-by a{color:#1b6ca8;text-decoration:none}
+.built-by a:hover{text-decoration:underline}
 
 /* Mobile */
-@media (max-width: 700px) {
-  .main { grid-template-columns: 1fr; }
-  .sidebar { order: -1; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  nav .by-text, nav .logo-badge { display: none; }
+@media(max-width:700px){
+  .grid{grid-template-columns:1fr}
+  .sidebar{order:-1}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .nav-by,.nav-badge{display:none}
 }
 </style>
 </head>
 <body>
-<div class="wrap">
 
 <nav>
-  <div class="logo-icon">M</div>
-  <span class="logo-text">MathMLtoTeXandAltText</span>
-  <span class="logo-badge">v1.0</span>
+  <div class="logo">M</div>
+  <span class="nav-title">MathMLtoTeXandAltText</span>
+  <span class="nav-badge">v1.0</span>
   <div class="nav-right">
-    <span class="by-text">by <strong style="color:var(--text)">Ambeth</strong></span>
-    <a class="gh-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+    <span class="nav-by">by <strong>Ambeth</strong></span>
+    <a class="nav-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
       GitHub
     </a>
   </div>
 </nav>
 
-<div class="main">
+<div class="wrap">
+<div class="grid">
 
-<!-- LEFT COLUMN -->
+<!-- LEFT -->
 <div>
 
-  <!-- Upload Card -->
-  <div class="card" style="margin-bottom:14px">
+  <div class="card">
     <div class="card-head">
       <span class="card-title">Upload XML File</span>
-      <span style="font-size:11px;color:var(--muted)">.xml only</span>
+      <span class="card-meta">.xml files only</span>
     </div>
     <div class="card-body">
 
-      <!-- Drop zone -->
       <div id="dropZone" class="dropzone">
-        <div class="dz-orbit">
-          <div class="dz-ring"></div>
-          <div class="dz-core">&#128196;</div>
+        <div class="dz-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1b6ca8" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
         <div class="dz-title">Drop your XML file here</div>
         <div class="dz-sub">or <span>click to browse</span></div>
@@ -2337,10 +2042,11 @@ nav {
         <input type="file" id="fileInput" accept=".xml" style="display:none">
       </div>
 
-      <!-- File selected -->
       <div id="fileInfo" style="display:none">
-        <div class="file-info">
-          <div class="file-icon-wrap">&#128196;</div>
+        <div class="file-box">
+          <div class="file-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1b6ca8" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
           <div style="min-width:0;flex:1">
             <div class="file-name" id="fileName">—</div>
             <div class="file-size" id="fileSize">—</div>
@@ -2348,37 +2054,43 @@ nav {
           <button class="remove-btn" onclick="removeFile()">&#215;</button>
         </div>
         <button class="process-btn" id="processBtn" disabled onclick="processFile()">
-          &#9654; Process Equations
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Process Equations
         </button>
       </div>
 
-      <!-- Progress -->
       <div id="progressArea" style="display:none">
-        <div class="prog-steps">
-          <div class="step" id="step1"></div>
-          <div class="step" id="step2"></div>
-          <div class="step" id="step3"></div>
-          <div class="step" id="step4"></div>
-          <div class="step" id="step5"></div>
+        <div class="prog-wrap">
+          <div class="prog-steps">
+            <div class="step" id="step1"></div>
+            <div class="step" id="step2"></div>
+            <div class="step" id="step3"></div>
+            <div class="step" id="step4"></div>
+            <div class="step" id="step5"></div>
+          </div>
+          <div class="wave-wrap">
+            <div class="wave-inner">
+              <div class="wave-bar"></div><div class="wave-bar"></div>
+              <div class="wave-bar"></div><div class="wave-bar"></div>
+              <div class="wave-bar"></div><div class="wave-bar"></div>
+              <div class="wave-bar"></div><div class="wave-bar"></div>
+            </div>
+          </div>
+          <div class="ticker-wrap" id="tickerArea" style="display:none">
+            <span class="ticker-label">equations found</span>
+            <span class="ticker-num" id="tickerNum">0</span>
+            <span class="ticker-unit">&#8593;</span>
+          </div>
+          <div class="prog-pct" id="progressPct">0%</div>
+          <div class="prog-label" id="progressLabel">Connecting...</div>
         </div>
-        <div class="wave-wrap"><div class="wave"></div><div class="wave2"></div></div>
-        <!-- Live equation ticker -->
-        <div class="ticker-wrap" id="tickerArea" style="display:none">
-          <span class="ticker-label">equations found</span>
-          <span class="ticker-num" id="tickerNum">0</span>
-          <span class="ticker-unit">&#8593;</span>
-        </div>
-        <div class="prog-pct" id="progressPct">0%</div>
-        <div class="prog-label" id="progressLabel">Connecting...</div>
       </div>
 
-      <!-- Error -->
       <div id="errorBox" class="error-box"></div>
 
     </div>
   </div>
 
-  <!-- Results Card -->
   <div class="card" id="results" style="display:none">
     <div class="card-head">
       <span class="card-title">Results</span>
@@ -2393,39 +2105,68 @@ nav {
 
 </div>
 
-<!-- RIGHT SIDEBAR -->
+<!-- SIDEBAR -->
 <div class="sidebar">
 
-  <div class="card" style="margin-bottom:14px">
+  <div class="card">
     <div class="card-head"><span class="card-title">TeX Engine</span></div>
     <div class="card-body">
-      <div class="engine-tag">
-        <div class="edot green"></div>
-        <span class="engine-name">WIRIS/MathType API — primary</span>
+      <div class="engine-row">
+        <div class="edot live"></div>
+        <div>
+          <div class="engine-name">WIRIS / MathType API</div>
+          <div class="engine-sub">Primary — highest accuracy</div>
+        </div>
       </div>
-      <div class="engine-tag" style="opacity:0.6">
-        <div class="edot amber"></div>
-        <span class="engine-name">mathml-to-latex — fallback</span>
+      <div class="engine-row" style="opacity:0.65">
+        <div class="edot fallback"></div>
+        <div>
+          <div class="engine-name">mathml-to-latex</div>
+          <div class="engine-sub">Fallback — offline</div>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:14px">
+  <div class="card">
     <div class="card-body">
-      <div class="info-card">
-        <div class="info-card-title">Supported Formats</div>
-        <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS/NLM</strong> — ACS, IOPP, LWW, CSIRO, Thieme</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c2)"></div><div class="info-text"><strong>Elsevier/MRW</strong> — ce:inline-formula, ce:disp-formula</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c3)"></div><div class="info-text"><strong>Springer/Books</strong> — InlineEquation, Equation</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>Wiley</strong> — bare &lt;math altimg&gt;, display-formula</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c5)"></div><div class="info-text"><strong>ACS Books/BITS</strong> — alternatives + mml:math</div></div>
-        <div class="info-row"><div class="info-dot" style="background:#A48FFF"></div><div class="info-text"><strong>Bare math</strong> — any &lt;math&gt; tag</div></div>
+      <div class="info-section" style="margin-bottom:16px">
+        <div class="info-label">Supported Publishers</div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#1b6ca8"></div>
+          <div class="info-text">JATS / NLM <span>ACS, IOPP, LWW, CSIRO, Thieme</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#e05577"></div>
+          <div class="info-text">Elsevier / MRW <span>ce: namespace, altimg</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#0f4c75"></div>
+          <div class="info-text">Springer / Books <span>InlineEquation, Equation</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#8a5c00"></div>
+          <div class="info-text">Wiley <span>bare math[@altimg]</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#1a7a46"></div>
+          <div class="info-text">ACS Books / BITS <span>alternatives + mml:math</span></div>
+        </div>
       </div>
-      <div class="info-card">
-        <div class="info-card-title">Output Files</div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c5)"></div><div class="info-text"><strong>TXT</strong> — TeX + AltText + MathML</div></div>
-        <div class="info-row"><div class="info-dot" style="background:#A48FFF"></div><div class="info-text"><strong>XML</strong> — modified with tex="" alttext=""</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>LOG</strong> — complexity analysis</div></div>
+      <div class="info-section">
+        <div class="info-label">Output Files</div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#1a7a46"></div>
+          <div class="info-text">equations.txt <span>TeX + AltText + MathML</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#1b6ca8"></div>
+          <div class="info-text">modified.xml <span>with tex="" alttext=""</span></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:#8a5c00"></div>
+          <div class="info-text">log.txt <span>complexity analysis</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2442,11 +2183,9 @@ nav {
 <script>
   var selectedFile = null;
 
-  // Block browser from opening XML files dropped on page
-  document.addEventListener('dragover', function(e) { e.preventDefault(); });
-  document.addEventListener('drop',     function(e) { e.preventDefault(); });
+  document.addEventListener('dragover', function(e){ e.preventDefault(); });
+  document.addEventListener('drop',     function(e){ e.preventDefault(); });
 
-  // Drop zone
   var dz = document.getElementById('dropZone');
   dz.addEventListener('dragover',  function(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
   dz.addEventListener('dragleave', function(e){ e.stopPropagation(); dz.classList.remove('dragover'); });
@@ -2489,56 +2228,49 @@ nav {
     document.getElementById('errorBox').style.display = 'none';
   }
 
-  // Progress
   var progTimer = null, progPct = 0, progStep = 0;
   var stepIds   = ['step1','step2','step3','step4','step5'];
-  var stepLabels = ['Connecting...','Parsing XML...','Converting via WIRIS...','Generating AltText...','Writing outputs...'];
-  var stepTargets = [10, 30, 70, 88, 96];
+  var stepLabels = ['Connecting to server...','Parsing XML structure...','Converting via WIRIS...','Generating AltText...','Writing output files...'];
+  var stepTargets = [10, 28, 72, 88, 96];
 
   function startProgress() {
     progPct = 0; progStep = 0;
     document.getElementById('progressArea').style.display = 'block';
     document.getElementById('fileInfo').style.display = 'none';
     document.getElementById('tickerArea').style.display = 'none';
-    stepIds.forEach(function(s){ document.getElementById(s).className='step'; });
+    stepIds.forEach(function(s){ document.getElementById(s).className = 'step'; });
     document.getElementById('progressPct').textContent = '0%';
-    document.getElementById('progressLabel').textContent = 'Connecting...';
-    // Animate ticker during WIRIS step
+    document.getElementById('progressLabel').textContent = 'Connecting to server...';
     var tickerVal = 0;
     progTimer = setInterval(function(){
       if (progStep < stepIds.length) {
         document.getElementById(stepIds[progStep]).className = 'step active';
         document.getElementById('progressLabel').textContent = stepLabels[progStep];
-        // Show ticker during conversion step
         if (progStep === 2) {
           document.getElementById('tickerArea').style.display = 'flex';
-          if (tickerVal < 43) {
+          if (tickerVal < 50) {
             tickerVal += Math.floor(Math.random()*3)+1;
-            if (tickerVal > 43) tickerVal = 43;
             var el = document.getElementById('tickerNum');
             el.textContent = tickerVal;
-            el.style.transform = 'scale(1.2)';
-            setTimeout(function(){ el.style.transform='scale(1)'; }, 100);
+            el.style.transform = 'scale(1.15)';
+            setTimeout(function(){ el.style.transform = 'scale(1)'; }, 100);
           }
         }
         if (progPct < stepTargets[progStep]) {
-          var speed = progStep === 2 ? 0.4 : 2;
-          progPct = Math.min(progPct + speed, stepTargets[progStep]);
+          progPct = Math.min(progPct + (progStep===2 ? 0.35 : 1.8), stepTargets[progStep]);
           document.getElementById('progressPct').textContent = Math.round(progPct) + '%';
-        } else {
-          progStep++;
-        }
+        } else { progStep++; }
       }
     }, 120);
   }
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
-    stepIds.forEach(function(s){ document.getElementById(s).className='step done'; });
+    stepIds.forEach(function(s){ document.getElementById(s).className = 'step done'; });
     document.getElementById('progressPct').textContent = '100%';
     document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
     document.getElementById('tickerArea').style.display = 'none';
-    setTimeout(function(){ document.getElementById('progressArea').style.display='none'; }, 900);
+    setTimeout(function(){ document.getElementById('progressArea').style.display = 'none'; }, 900);
   }
 
   function showError(msg) {
@@ -2546,6 +2278,19 @@ nav {
     box.textContent = '\u26a0 ' + msg;
     box.style.display = 'block';
     document.getElementById('processBtn').disabled = false;
+  }
+
+  function sc(num, label, cls) {
+    return '<div class="stat-card"><div class="stat-num ' + cls + '">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
+  }
+
+  function dlCard(text, filename, iconClass, icon, name, desc) {
+    var blob = new Blob([text], { type:'text/plain;charset=utf-8' });
+    var url  = URL.createObjectURL(blob);
+    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
+      '<div class="dl-icon '+iconClass+'">'+icon+'</div>' +
+      '<div><div class="dl-name">'+name+'</div><div class="dl-desc">'+desc+'</div></div>' +
+      '<div class="dl-arrow">&#8595;</div></a>';
   }
 
   function processFile() {
@@ -2557,19 +2302,6 @@ nav {
     document.getElementById('progressLabel').textContent = 'Waking server...';
     wakeServer(0);
   }
-
-  function sc(num, label, cls) {
-    return '<div class="stat-card ' + cls + '"><div class="stat-num">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
-  }
-  function dlCard(text, filename, iconClass, icon, name, desc) {
-    var blob = new Blob([text], { type:'text/plain;charset=utf-8' });
-    var url  = URL.createObjectURL(blob);
-    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
-      '<div class="dl-icon '+iconClass+'">'+icon+'</div>' +
-      '<div><div class="dl-name">'+name+'</div><div class="dl-desc">'+desc+'</div></div>' +
-      '<div class="dl-arrow">&#8595;</div></a>';
-  }
-
   function wakeServer(attempts) {
     if (attempts > 20) { // max 60s wait (20 x 3s)
       sendFile(); // try anyway
