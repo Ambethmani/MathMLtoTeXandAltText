@@ -1113,6 +1113,61 @@ function stripDOCTYPE(xml) {
     return result.trim();
 }
 
+/* Reduce Elsevier XML size before JSDOM — strip only math-free content.
+   Safe even when bibliography titles contain equations (rare but possible).
+   Approach: strip individual bib entries that have no math, keep ones that do. */
+function stripElsevierBibliography(xml) {
+    let result = xml;
+    const before = result.length;
+    let stripped = 0;
+
+    // Strip individual <ce:bib-reference> entries with no math
+    result = result.replace(/<ce:bib-reference[^>]*>[\s\S]*?<\/ce:bib-reference>/g,
+        function(match) {
+            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
+                return match; // KEEP — has equation in title
+            }
+            stripped++;
+            return ""; // strip — pure text reference
+        }
+    );
+
+    // Strip individual <sb:reference> entries with no math
+    result = result.replace(/<sb:reference[^>]*>[\s\S]*?<\/sb:reference>/g,
+        function(match) {
+            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
+                return match;
+            }
+            stripped++;
+            return "";
+        }
+    );
+
+    // Collapse now-empty wrapper tags
+    result = result.replace(/<ce:bibliography([^>]*)>\s*<\/ce:bibliography>/g,
+                            "<ce:bibliography$1/>");
+    result = result.replace(/<ce:bibliography-sec([^>]*)>\s*<\/ce:bibliography-sec>/g,
+                            "<ce:bibliography-sec$1/>");
+    result = result.replace(/<tail>\s*<\/tail>/g, "<tail/>");
+
+    // Strip ce:sections prose ONLY if it has no math
+    result = result.replace(/<ce:sections[^>]*>[\s\S]*?<\/ce:sections>/g,
+        function(match) {
+            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
+                return match; // keep — has inline equations in body
+            }
+            stripped++;
+            return "<ce:sections/>"; // strip — pure prose
+        }
+    );
+
+    const saved = Math.round((before - result.length) / 1024);
+    if (saved > 0) {
+        console.log(`  [INFO] Elsevier strip: ${before} → ${result.length} chars, saved ${saved}KB, removed ${stripped} items`);
+    }
+    return result;
+}
+
 async function processXML(rawXML, filename) {
 
     // ── Fast pre-check: does this XML contain any equations? ─────
@@ -1159,6 +1214,20 @@ async function processXML(rawXML, filename) {
     // Pre-process XML — use shared stripDOCTYPE function
     let cleanXML = rawXML;
     try { cleanXML = stripDOCTYPE(rawXML); } catch (_) {}
+
+    // ── Elsevier size reduction ────────────────────────────────────
+    // Elsevier XMLs are 200KB+ due to full bibliography (158+ refs)
+    // and body text. Equations only appear in <ce:floats> and captions.
+    // Extract only the parts that contain equations to reduce memory use.
+    if (cleanXML.indexOf("<ce:") !== -1 || cleanXML.indexOf(" ce:") !== -1) {
+        try {
+            const stripped = stripElsevierBibliography(cleanXML);
+            if (stripped.length < cleanXML.length * 0.8) {
+                console.log(`  [INFO] Elsevier XML reduced: ${cleanXML.length} → ${stripped.length} chars`);
+                cleanXML = stripped;
+            }
+        } catch (_) {}
+    }
 
     // ── Inject missing namespace declarations ──────────────────
     // Many Elsevier/publisher XMLs use namespace prefixes (ce:, mml:, xlink:)
