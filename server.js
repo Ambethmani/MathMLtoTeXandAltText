@@ -2099,7 +2099,15 @@ a:hover{text-decoration:underline}
     document.getElementById('results').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
+    document.getElementById('progressLabel').textContent = 'Connecting...';
 
+    // Ping server first to wake it from Render sleep, then upload
+    fetch('/health', { method: 'GET' })
+      .then(function() { return sendFile(); })
+      .catch(function() { return sendFile(); }); // still try even if ping fails
+  }
+
+  function sendFile() {
     var formData = new FormData();
     formData.append('file', selectedFile);
 
@@ -2174,7 +2182,7 @@ a:hover{text-decoration:underline}
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
-  } // end processFile
+  } // end sendFile
 
   function sc(num, label, cls) {
     return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
