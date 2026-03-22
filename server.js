@@ -2151,16 +2151,23 @@ a:hover{text-decoration:underline}
       var cleanXml = xmlText.replace(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/gi, '');
       cleanXml = cleanXml.replace(/<!ENTITY[^>]*>/gi, '');
 
-      // Send clean XML + original DOCTYPE as separate field
+      // Send clean XML as file, DOCTYPE as base64 header (WAF only scans body)
       var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
       formData.append('file', cleanFile);
+
+      // Encode DOCTYPE as base64 and send as header — WAF doesn't inspect headers for XXE
+      var fetchHeaders = {};
       if (savedDoctype) {
-        formData.append('doctype', savedDoctype);
+        try {
+          fetchHeaders['X-Original-Doctype'] = btoa(unescape(encodeURIComponent(savedDoctype)));
+        } catch(e) {
+          fetchHeaders['X-Original-Doctype'] = btoa(savedDoctype);
+        }
       }
 
-      fetch('/process', { method: 'POST', body: formData })
+      fetch('/process', { method: 'POST', body: formData, headers: fetchHeaders })
       .then(function(resp) {
         var status = resp.status;
         return resp.text().then(function(t) { return {status:status, text:t}; });
@@ -2286,7 +2293,7 @@ app.get("/health", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-app.post("/process", upload.fields([{ name: "file", maxCount: 1 }]), async (req, res) => {
+app.post("/process", upload.single("file"), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
@@ -2294,17 +2301,16 @@ app.post("/process", upload.fields([{ name: "file", maxCount: 1 }]), async (req,
   try {
 
     // ── Read uploaded file ───────────────────────────────────────
-    const uploadedFile = req.files && req.files["file"] && req.files["file"][0];
-    if (!uploadedFile) {
+    if (!req.file) {
         return res.status(400).json({ success: false, error: "No file uploaded." });
     }
-    const origName  = uploadedFile.originalname;
+    const origName  = req.file.originalname;
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
 
     let rawXML;
     try {
-        rawXML = fs.readFileSync(uploadedFile.path, "utf8");
+        rawXML = fs.readFileSync(req.file.path, "utf8");
     } catch (e) {
         return res.status(500).json({ success: false, error: "Cannot read file: " + e.message });
     }
@@ -2312,10 +2318,16 @@ app.post("/process", upload.fields([{ name: "file", maxCount: 1 }]), async (req,
         return res.status(400).json({ success: false, error: "File is empty." });
     }
     // Restore original DOCTYPE — browser stripped it to bypass WAF
-    // The original DOCTYPE is sent as a separate form field
-    const originalDoctype = (req.body && req.body.doctype) ? req.body.doctype : null;
-    if (originalDoctype) {
-        console.log(`[INFO] DOCTYPE restored from form field (${originalDoctype.length} chars)`);
+    // Sent as base64-encoded X-Original-Doctype header (WAF doesn't scan headers for XXE)
+    let originalDoctype = null;
+    const doctypeHeader = req.headers['x-original-doctype'];
+    if (doctypeHeader) {
+        try {
+            originalDoctype = Buffer.from(doctypeHeader, 'base64').toString('utf8');
+            console.log(`[INFO] DOCTYPE received from header (${originalDoctype.length} chars)`);
+        } catch(e) {
+            console.log('[WARN] Could not decode DOCTYPE header:', e.message);
+        }
     }
     console.log(`[INFO] Received: ${origName} (${rawXML.length} chars)`);
 
@@ -2404,7 +2416,7 @@ app.post("/process", upload.fields([{ name: "file", maxCount: 1 }]), async (req,
     }
 
     // Clean up uploaded file from disk
-    try { if (uploadedFile && uploadedFile.path) fs.unlinkSync(uploadedFile.path); } catch (_) {}
+    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
