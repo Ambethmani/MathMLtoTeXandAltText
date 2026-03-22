@@ -2105,7 +2105,7 @@ a:hover{text-decoration:underline}
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
-
+  } // end processFile
 
   function sc(num, label, cls) {
     return '<div class="stat-card '+cls+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
