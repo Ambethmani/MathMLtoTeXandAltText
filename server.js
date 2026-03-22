@@ -2133,10 +2133,25 @@ a:hover{text-decoration:underline}
   }
 
   function sendFile() {
-    var formData = new FormData();
-    formData.append('file', selectedFile);
+    // Strip DOCTYPE + ENTITY declarations in browser BEFORE sending
+    // Render's WAF blocks requests containing <!ENTITY ... SYSTEM ...>
+    // (it looks like an XXE injection attack to the firewall)
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var xmlText = e.target.result;
 
-    fetch('/process', { method: 'POST', body: formData })
+      // Remove DOCTYPE block including internal subset [...]
+      xmlText = xmlText.replace(/<!DOCTYPE[^[>]*(\[[^\]]*\])?\s*>/gi, '');
+      // Remove any remaining ENTITY declarations
+      xmlText = xmlText.replace(/<!ENTITY[^>]*>/gi, '');
+
+      // Send as clean XML blob — WAF won't block it
+      var cleanBlob = new Blob([xmlText], { type: 'application/xml' });
+      var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
+      var formData = new FormData();
+      formData.append('file', cleanFile);
+
+      fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
         var status = resp.status;
         return resp.text().then(function(t) { return {status:status, text:t}; });
@@ -2222,6 +2237,13 @@ a:hover{text-decoration:underline}
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
+    }; // end reader.onload
+    reader.onerror = function() {
+      stopProgress(false);
+      showError('Failed to read file');
+      document.getElementById('processBtn').disabled = false;
+    };
+    reader.readAsText(selectedFile);
   } // end sendFile
 
   function sc(num, label, cls) {
