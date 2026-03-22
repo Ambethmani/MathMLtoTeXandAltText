@@ -303,7 +303,11 @@ const CONFIG = {
     WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "99999"),
 
     // Log which engine was used
-    LOG_ENGINE_USED: true
+    LOG_ENGINE_USED: true,
+
+    // Parallel batch size for WIRIS calls
+    // 5 = process 5 equations simultaneously (5x faster than sequential)
+    WIRIS_BATCH_SIZE: parseInt(process.env.WIRIS_BATCH_SIZE || "5")
 };
 
 /* ── WIRIS API CALL ────────────────────────────────────────── */
@@ -1173,6 +1177,13 @@ function stripElsevierBibliography(xml) {
     return result;
 }
 
+async function processBatch(items, fn, batchSize) {
+    const sz = batchSize || CONFIG.WIRIS_BATCH_SIZE || 5;
+    for (let i = 0; i < items.length; i += sz) {
+        await Promise.all(items.slice(i, i + sz).map(fn));
+    }
+}
+
 async function processXML(rawXML, filename) {
 
     // ── Fast pre-check: does this XML contain any equations? ─────
@@ -1180,14 +1191,18 @@ async function processXML(rawXML, filename) {
     // and return immediately with empty equations array.
     // This makes no-equation files process in milliseconds.
     const hasMath = (
-        rawXML.indexOf("<math")          !== -1 ||
-        rawXML.indexOf("<mml:math")      !== -1 ||
-        rawXML.indexOf("inline-formula") !== -1 ||
-        rawXML.indexOf("disp-formula")   !== -1 ||
-        rawXML.indexOf("InlineEquation") !== -1 ||
-        rawXML.indexOf("<Equation")      !== -1 ||
-        rawXML.indexOf("type=\"eqn\"")  !== -1 ||
-        rawXML.indexOf("type='eqn'")   !== -1
+        rawXML.indexOf("<math")            !== -1 ||
+        rawXML.indexOf("<mml:math")        !== -1 ||
+        rawXML.indexOf("inline-formula")   !== -1 ||
+        rawXML.indexOf("disp-formula")     !== -1 ||
+        rawXML.indexOf("InlineEquation")   !== -1 ||
+        rawXML.indexOf("<Equation")        !== -1 ||
+        rawXML.indexOf("type=\"eqn\"")   !== -1 ||
+        rawXML.indexOf("type='eqn'")     !== -1 ||
+        rawXML.indexOf("display-formula")  !== -1 ||
+        rawXML.indexOf("display-equation") !== -1 ||
+        rawXML.indexOf("inline-equation")  !== -1 ||
+        rawXML.indexOf("equation-group")   !== -1
     );
 
     if (!hasMath) {
@@ -1255,7 +1270,10 @@ async function processXML(rawXML, filename) {
         "dc":    "http://purl.org/dc/elements/1.1/",
         "prism": "http://prismstandard.org/namespaces/basic/2.0/",
         "ait":   "http://www.elsevier.com/2001/XMLSchema",
-        "xsi":   "http://www.w3.org/2001/XMLSchema-instance"
+        "xsi":   "http://www.w3.org/2001/XMLSchema-instance",
+        "wiley":  "http://www.interscience.wiley.com/namespaces/wiley",
+        "als":    "http://schema.aip.org/schema/als/1.0",
+        "bits":   "http://jats.nlm.nih.gov/ns/archiving/1.0/"
     };
 
     function injectNamespaces(xml) {
@@ -1442,26 +1460,26 @@ async function processXML(rawXML, filename) {
         el.tagName.toLowerCase() === "inline-formula" ||
         el.tagName.toLowerCase() === "ce:inline-formula"
     );
-    for (const [i, eq] of inlineFormulas.entries()) {
-        await processFormula(eq, "Inline Equation", "JATS", `inline-${i+1}`);
-    }
+    await processBatch([...inlineFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
+        async function(item){ await processFormula(item.eq, "Inline Equation", "JATS", `inline-${item.i+1}`); });
 
     // ── FORMAT 1: JATS disp-formula ──────────────────────────────
     const dispFormulas = allEls.filter(el =>
         el.tagName.toLowerCase() === "disp-formula" ||
         el.tagName.toLowerCase() === "ce:disp-formula"
     );
-    for (const [i, eq] of dispFormulas.entries()) {
-        await processFormula(eq, "Display Equation", "JATS", `disp-${i+1}`);
-    }
+    await processBatch([...dispFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
+        async function(item){ await processFormula(item.eq, "Display Equation", "JATS", `disp-${item.i+1}`); });
 
     // ── FORMAT 2: Springer ────────────────────────────────────────
-    for (const [i, eq] of [...document.querySelectorAll("InlineEquation, Equation")].entries()) {
+    await processBatch([...document.querySelectorAll("InlineEquation, Equation")].map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+      const i = item.i, eq = item.eq;
+
         const math =
             eq.querySelector("math") ||
             [...eq.getElementsByTagName("math")][0] ||
             [...eq.getElementsByTagName("mml:math")][0];
-        if (!math) continue;
+        if (!math) return;
         let label = "";
         if (eq.tagName === "InlineEquation") {
             label = eq.getAttribute("ID") || `inline-${i+1}`;
@@ -1514,6 +1532,73 @@ async function processXML(rawXML, filename) {
             altStatus: altRes.status,
             altReason: altRes.reason
         });
+    
+    });
+
+    // ── FORMAT 2b: Wiley WML3 format ─────────────────────────────────
+    // Wiley uses <display-formula>, <display-equation>, <inline-equation>
+    // with <math> or <mml:math> inside
+    if (equations.length === 0) {
+        const wileyEls = allEls.filter(function(el) {
+            const t = el.tagName.toLowerCase();
+            return t === "display-formula" || t === "display-equation" ||
+                   t === "inline-equation" || t === "equation-group";
+        });
+        if (wileyEls.length > 0) {
+            console.log(`  [INFO] Wiley WML3 format — ${wileyEls.length} equations`);
+            await processBatch(wileyEls.map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+                const eq = item.eq, i = item.i;
+                const math = eq.querySelector("math") ||
+                    [...eq.getElementsByTagName("math")][0] ||
+                    [...eq.getElementsByTagName("mml:math")][0];
+                if (!math) return;
+                const texRes = await generateTeX(math);
+                const altRes = generateAltText(math);
+                const type = eq.tagName.toLowerCase().includes("inline") ? "Inline Equation" : "Display Equation";
+                const imgEl = eq.querySelector("imageobject") ||
+                    eq.querySelector("primary-object") ||
+                    eq.querySelector("graphic") ||
+                    eq.querySelector("inline-graphic") ||
+                    eq.querySelector("img");
+                const texOK = texRes.value && texRes.status === "OK";
+                const altOK = altRes.value && altRes.status === "OK";
+                if (imgEl) {
+                    if (texOK) { imgEl.setAttribute("tex", texRes.value); xmlModified = true; }
+                    if (altOK) { imgEl.setAttribute("alttext", altRes.value); }
+                } else if (math.hasAttribute("altimg")) {
+                    if (texOK) { math.setAttribute("tex", texRes.value); xmlModified = true; }
+                    if (altOK) { math.setAttribute("alttext", altRes.value); }
+                }
+                equations.push({
+                    type, format: "wiley", id: eq.getAttribute("id") || `eq-${i+1}`,
+                    tex: texRes.value, alt: altRes.value, mathml: math.outerHTML,
+                    hasImg: !!(imgEl || math.hasAttribute("altimg")),
+                    texStatus: texRes.status, texReason: texRes.reason,
+                    altStatus: altRes.status, altReason: altRes.reason,
+                    engine: texRes.engine || "mathml-to-latex",
+                    wirisAttempted: texRes.wirisAttempted || false
+                });
+            });
+        }
+    }
+
+    // ── FORMAT 2c: ACS Books / BITS <alternatives> format ─────────────
+    // Some ACS/BITS files wrap equations in <alternatives> containing
+    // both MathML and image. Pick up any remaining <alternatives> with math.
+    if (equations.length === 0) {
+        const altEls = allEls.filter(function(el) {
+            const t = el.tagName.toLowerCase();
+            return t === "alternatives" && (
+                el.querySelector("math") ||
+                [...el.getElementsByTagName("mml:math")].length > 0
+            );
+        });
+        if (altEls.length > 0) {
+            console.log(`  [INFO] ACS/BITS <alternatives> format — ${altEls.length} equations`);
+            await processBatch(altEls.map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+                await processFormula(item.eq, "Inline Equation", "acs-bits", `eq-${item.i+1}`);
+            });
+        }
     }
 
     // ── FORMAT 3: HTML span ───────────────────────────────────────
@@ -1522,14 +1607,16 @@ async function processXML(rawXML, filename) {
     //     <span class="mathml"><math>...</math></span>   <- math here
     //     <span class="eqnimg"><img tex="" alttext=""/>  <- img here
     //   </span>
-    for (const [i, eq] of [...document.querySelectorAll("span.inline[type='eqn'], span.display[type='eqn']")].entries()) {
+    await processBatch([...document.querySelectorAll("span.inline[type='eqn'], span.display[type='eqn']")].map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+      const i = item.i, eq = item.eq;
+
 
         // Find math — may be direct child OR inside span.mathml wrapper
         const math =
             eq.querySelector("math") ||
             [...eq.getElementsByTagName("math")][0] ||
             [...eq.getElementsByTagName("mml:math")][0];
-        if (!math) continue;
+        if (!math) return;
 
         const texRes2 = await generateTeX(math);
         const altRes2 = generateAltText(math);
@@ -1594,7 +1681,8 @@ async function processXML(rawXML, filename) {
             wirisAttempted: texRes2.wirisAttempted || false,
             wirisResult:    texRes2.wirisResult    || ""
         });
-    }
+    
+    });
 
     // ── FORMAT 4: Bare math fallback ──────────────────────────────
     if (equations.length === 0) {
@@ -1603,11 +1691,16 @@ async function processXML(rawXML, filename) {
             ...document.getElementsByTagName("math"),
             ...document.getElementsByTagName("mml:math")
         ].filter((el, idx, arr) => arr.indexOf(el) === idx); // deduplicate
+        // Detect Wiley by checking xmlns or wiley:location attribute
+        const isWiley = allMathEls.length > 0 && allMathEls[0].hasAttribute("wiley:location");
+        if (isWiley) console.log(`  [INFO] Wiley format detected — bare math[@altimg]`);
 
-        for (const [i, math] of allMathEls.entries()) {
+        // Pre-allocate result slots to maintain order
+        const bareResults = new Array(allMathEls.length);
+        await processBatch(allMathEls.map(function(m,i){return{m:m,i:i};}), async function(item) {
+            const i = item.i, math = item.m;
             const texRes3 = await generateTeX(math);
             const altRes3 = generateAltText(math);
-            // For bare math — write tex/alttext onto math[@altimg] if present
             const hasAltImg3 = math.hasAttribute("altimg");
             if (hasAltImg3 && texRes3.value && texRes3.status === "OK") {
                 math.setAttribute("tex", texRes3.value);
@@ -1617,13 +1710,9 @@ async function processXML(rawXML, filename) {
                 math.setAttribute("alttext", altRes3.value);
                 xmlModified = true;
             }
-            if (hasAltImg3) {
-                console.log(`  [INFO] bare math[@altimg] updated — eq-${i+1}`);
-            }
-
-            equations.push({
+            bareResults[i] = {
                 type:        math.getAttribute("display") === "block" ? "Display Equation" : "Inline Equation",
-                format:      "bare",
+                format:      isWiley ? "wiley" : "bare",
                 id:          math.getAttribute("id") || `eq-${i+1}`,
                 tex:         texRes3.value,
                 alt:         altRes3.value,
@@ -1632,8 +1721,9 @@ async function processXML(rawXML, filename) {
                 writeTarget: hasAltImg3 ? "math[@altimg]" : "none",
                 texStatus:   texRes3.status, texReason: texRes3.reason,
                 altStatus:   altRes3.status, altReason: altRes3.reason
-            });
-        }
+            };
+        });
+        bareResults.forEach(function(r){ if(r) equations.push(r); });
     }
 
     // ── Build TXT content ─────────────────────────────────────────
@@ -2235,11 +2325,14 @@ nav {
         <div class="dz-title">Drop your XML file here</div>
         <div class="dz-sub">or <span>click to browse</span></div>
         <div class="format-pills">
-          <span class="fpill">JATS/NLM</span>
+          <span class="fpill">ACS</span>
           <span class="fpill">Elsevier</span>
           <span class="fpill">Springer</span>
+          <span class="fpill">Wiley</span>
           <span class="fpill">TandF</span>
-          <span class="fpill">Bare math</span>
+          <span class="fpill">IOPP</span>
+          <span class="fpill">LWW</span>
+          <span class="fpill">Thieme</span>
         </div>
         <input type="file" id="fileInput" accept=".xml" style="display:none">
       </div>
@@ -2321,10 +2414,12 @@ nav {
     <div class="card-body">
       <div class="info-card">
         <div class="info-card-title">Supported Formats</div>
-        <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS/NLM</strong> — inline-formula, disp-formula</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c2)"></div><div class="info-text"><strong>Elsevier</strong> — ce:inline-formula, ce:disp-formula</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c3)"></div><div class="info-text"><strong>Springer</strong> — InlineEquation, Equation</div></div>
-        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>Bare math</strong> — any &lt;math&gt; tag</div></div>
+        <div class="info-row"><div class="info-dot"></div><div class="info-text"><strong>JATS/NLM</strong> — ACS, IOPP, LWW, CSIRO, Thieme</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c2)"></div><div class="info-text"><strong>Elsevier/MRW</strong> — ce:inline-formula, ce:disp-formula</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c3)"></div><div class="info-text"><strong>Springer/Books</strong> — InlineEquation, Equation</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c4)"></div><div class="info-text"><strong>Wiley</strong> — bare &lt;math altimg&gt;, display-formula</div></div>
+        <div class="info-row"><div class="info-dot" style="background:var(--c5)"></div><div class="info-text"><strong>ACS Books/BITS</strong> — alternatives + mml:math</div></div>
+        <div class="info-row"><div class="info-dot" style="background:#A48FFF"></div><div class="info-text"><strong>Bare math</strong> — any &lt;math&gt; tag</div></div>
       </div>
       <div class="info-card">
         <div class="info-card-title">Output Files</div>
@@ -2703,17 +2798,19 @@ app.post("/process", upload.single("file"), async (req, res) => {
         });
     }
 
-    // Restore original DOCTYPE in modified XML output
-    if (originalDoctype && result.xmlContent) {
-        if (result.xmlContent.startsWith('<?xml')) {
-            const declEnd = result.xmlContent.indexOf('?>') + 2;
-            result.xmlContent = result.xmlContent.slice(0, declEnd) +
-                '\n' + originalDoctype +
-                result.xmlContent.slice(declEnd);
+    // Restore original DOCTYPE in output XML
+    // Works whether XML was modified or not
+    if (originalDoctype) {
+        const xmlToFix = result.xmlContent || cleanedXML;
+        let fixed;
+        if (xmlToFix.startsWith('<?xml')) {
+            const declEnd = xmlToFix.indexOf('?>') + 2;
+            fixed = xmlToFix.slice(0, declEnd) + '\n' + originalDoctype + xmlToFix.slice(declEnd);
         } else {
-            result.xmlContent = originalDoctype + '\n' + result.xmlContent;
+            fixed = originalDoctype + '\n' + xmlToFix;
         }
-        console.log('[INFO] DOCTYPE restored in output XML');
+        result.xmlContent = fixed;
+        console.log(`[INFO] DOCTYPE restored in output XML (${originalDoctype.length} chars)`);
     }
 
     // Ensure OUTPUT folder exists (re-check at request time)
