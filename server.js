@@ -24,6 +24,15 @@ try {
 const { MathMLToLaTeX } = require("mathml-to-latex");
 const multer  = require("multer");
 const express = require("express");
+const EventEmitter = require("events");
+
+// Per-request progress emitter
+// Key: requestId, Value: EventEmitter
+const progressEmitters = new Map();
+function emitProgress(reqId, step, label, pct) {
+    const emitter = progressEmitters.get(reqId);
+    if (emitter) emitter.emit("progress", { step, label, pct });
+}
 
 /* ================================================================
    EXPRESS SETUP
@@ -2900,6 +2909,7 @@ nav{
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
+    if (_sseSource) { _sseSource.close(); _sseSource = null; }
     stepIds.forEach(function(s){ document.getElementById(s).className='step done'; });
     document.getElementById('progressPct').textContent='100%';
     document.getElementById('progressLabel').textContent=success?'Complete!':'Failed';
@@ -2992,6 +3002,31 @@ nav{
 
       fetch('/process', { method: 'POST', body: formData, headers: fetchHeaders })
       .then(function(resp) {
+        // Open SSE stream for live backend progress
+        var reqId = resp.headers.get('X-Request-Id');
+        if (reqId && typeof EventSource !== 'undefined') {
+          if (window._sseSource) { window._sseSource.close(); }
+          window._sseSource = new EventSource('/progress/' + reqId);
+          window._sseSource.onmessage = function(ev) {
+            try {
+              var msg = JSON.parse(ev.data);
+              document.getElementById('progressLabel').textContent = msg.label;
+              if (msg.pct !== undefined) {
+                document.getElementById('progressPct').textContent = Math.round(msg.pct) + '%';
+              }
+              // Sync step indicators with backend
+              var steps = ['step1','step2','step3','step4','step5'];
+              for (var s = 0; s < steps.length; s++) {
+                if (s < msg.step - 1)      document.getElementById(steps[s]).className = 'step done';
+                else if (s === msg.step-1) document.getElementById(steps[s]).className = 'step active';
+                else                       document.getElementById(steps[s]).className = 'step';
+              }
+            } catch(_) {}
+          };
+          window._sseSource.onerror = function() {
+            if (window._sseSource) { window._sseSource.close(); window._sseSource = null; }
+          };
+        }
         var status = resp.status;
         return resp.text().then(function(t) { return {status:status, text:t}; });
       })
@@ -3095,6 +3130,40 @@ app.get("/health", (req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
 });
 
+// ── GET /progress/:reqId — SSE live progress stream ──────────────
+app.get("/progress/:reqId", (req, res) => {
+    const reqId = req.params.reqId;
+
+    res.setHeader("Content-Type",  "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection",    "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    // Create emitter for this request
+    const emitter = new EventEmitter();
+    progressEmitters.set(reqId, emitter);
+
+    const send = (data) => {
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    emitter.on("progress", send);
+
+    // Clean up on client disconnect
+    req.on("close", () => {
+        emitter.removeAllListeners();
+        progressEmitters.delete(reqId);
+    });
+
+    // Auto-clean after 3 minutes
+    setTimeout(() => {
+        emitter.removeAllListeners();
+        progressEmitters.delete(reqId);
+        if (!res.writableEnded) res.end();
+    }, 180000);
+});
+
 // ── POST /process — main endpoint ───────────────────────────────
 app.post("/process", upload.single("file"), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
@@ -3135,6 +3204,14 @@ app.post("/process", upload.single("file"), async (req, res) => {
     const fileSizeKB = Math.round(rawXML.length / 1024);
     console.log(`[INFO] Received: ${origName} (${fileSizeKB} KB)`);
 
+    // Generate unique request ID for SSE progress stream
+    const reqId = Date.now() + "_" + Math.random().toString(36).slice(2,8);
+    // Pre-create emitter so SSE client can connect before processing starts
+    const _reqEmitter = new EventEmitter();
+    progressEmitters.set(reqId, _reqEmitter);
+    // Send reqId in response header so browser can open SSE connection
+    res.setHeader("X-Request-Id", reqId);
+
     // Warn on large files — Render free tier has 512MB RAM
     if (rawXML.length > 800 * 1024) {
         console.warn(`[WARN] Large file: ${fileSizeKB}KB — may be slow on free tier`);
@@ -3155,6 +3232,8 @@ app.post("/process", upload.single("file"), async (req, res) => {
         }
     }, 110000);
 
+    emitProgress(reqId, 1, "Parsing XML structure...", 10);
+
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
     let cleanedXML = rawXML;
     try {
@@ -3172,6 +3251,8 @@ app.post("/process", upload.single("file"), async (req, res) => {
     }
 
     // Process — always return JSON even if something throws
+    emitProgress(reqId, 2, "Converting equations via WIRIS...", 20);
+
     let result;
     try {
         result = await processXML(cleanedXML, origName);
@@ -3185,6 +3266,8 @@ app.post("/process", upload.single("file"), async (req, res) => {
             hint:  "Check if the XML is valid. DOCTYPE with external DTD references are stripped automatically."
         });
     }
+
+    emitProgress(reqId, 3, `Equations converted (${result.equations ? result.equations.length : 0}) — building output files...`, 96);
 
     // Restore original DOCTYPE in output XML
     // Works whether XML was modified or not
@@ -3206,6 +3289,8 @@ app.post("/process", upload.single("file"), async (req, res) => {
         fs.mkdirSync(OUTPUT, { recursive: true });
         console.log(`[INFO] Created outputs folder: ${OUTPUT}`);
     }
+
+    emitProgress(reqId, 4, "Writing output files...", 97);
 
     // Save all 3 output files in PARALLEL (async) — not sequential sync
     const txtFilename = `${baseName}_${timestamp}_equations.txt`;
@@ -3233,12 +3318,14 @@ app.post("/process", upload.single("file"), async (req, res) => {
     try {
         await Promise.all(writePromises);
         console.log(`[OK] All files written`);
+        emitProgress(reqId, 5, "Complete! Sending results...", 99);
     } catch(e) {
         return res.status(500).json({ error: e.message });
     }
 
-    // Clear request timeout
+    // Clear request timeout and progress emitter
     clearTimeout(reqTimeout);
+    setTimeout(() => { progressEmitters.delete(reqId); }, 5000);
 
     // Clean up uploaded file from disk
     try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
