@@ -1816,6 +1816,10 @@ async function processXML(rawXML, filename, reqId) {
     // Use getElementsByTagName — works with namespaced elements
     // querySelectorAll with namespace prefixes is invalid in JSDOM
     const allEls = [...document.getElementsByTagName("*")];
+    const dispFormulas = allEls.filter(el =>
+        el.tagName.toLowerCase() === "disp-formula" ||
+        el.tagName.toLowerCase() === "ce:disp-formula"
+    );
     const inlineFormulas = allEls.filter(el =>
         el.tagName.toLowerCase() === "inline-formula" ||
         el.tagName.toLowerCase() === "ce:inline-formula"
@@ -1831,10 +1835,6 @@ async function processXML(rawXML, filename, reqId) {
         });
 
     // ── FORMAT 1: JATS disp-formula ──────────────────────────────
-    const dispFormulas = allEls.filter(el =>
-        el.tagName.toLowerCase() === "disp-formula" ||
-        el.tagName.toLowerCase() === "ce:disp-formula"
-    );
     await processBatch([...dispFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
         async function(item){ await processFormula(item.eq, "Display Equation", "JATS", `disp-${item.i+1}`); });
 
