@@ -1468,17 +1468,25 @@ function patchXMLString(xml, equations) {
         if (!eq.hasImg || !eq.writeTarget) continue;
         if (eq.writeTarget === "none") continue;
 
-        const tex    = eq.tex    || "";
-        const alt    = eq.alt    || "";
+        const tex = eq.tex || "";
+        const alt = eq.alt || "";
         if (!tex && !alt) continue;
 
         if (eq.writeTarget === "math[@altimg]") {
-            // Find <math ... altimg="..."> and inject tex="" alttext=""
-            result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
-        } else {
-            // Find img/graphic tag — use eq.id or equation position to locate
-            // Try common img tag names
-            for (const tag of ["inline-graphic","graphic","img","ce:inline-graphic","ce:graphic"]) {
+            // Handle both <math altimg=...> and <mml:math altimg=...>
+            // Try mml: prefix first (Elsevier), then plain math (others)
+            const before = result;
+            result = injectAttrsOnTag(result, "mml:math", "altimg", tex, alt);
+            if (result === before) {
+                result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
+            }
+        } else if (eq.writeTarget === "graphic") {
+            // Try all graphic/img tag variants in order
+            for (const tag of [
+                "ce:inline-graphic", "ce:graphic",
+                "inline-graphic", "graphic",
+                "imageobject", "img"
+            ]) {
                 const patched = injectAttrsOnFirstUntaggedMatch(result, tag, tex, alt);
                 if (patched !== result) { result = patched; break; }
             }
@@ -1488,27 +1496,42 @@ function patchXMLString(xml, equations) {
 }
 
 function injectAttrsOnTag(xml, tagName, requiredAttr, tex, alt) {
-    // Find <tagName ... requiredAttr="..."> that doesn't already have tex=""
+    // Find <tagName ... requiredAttr="..."> and inject tex="" alttext=""
+    // Handles multi-line tags and both self-closing /> and regular > endings
     let p = 0;
     let out = "";
     const openStr = "<" + tagName;
     while (p < xml.length) {
         const start = xml.indexOf(openStr, p);
         if (start === -1) { out += xml.slice(p); break; }
-        // Find end of opening tag
-        const end = xml.indexOf(">", start);
+        // Make sure it's a real tag start (next char is space, >, or /)
+        const afterTag = xml[start + openStr.length];
+        if (afterTag !== " " && afterTag !== "\t" && afterTag !== "\n" && afterTag !== ">" && afterTag !== "/") {
+            out += xml.slice(p, start + openStr.length);
+            p = start + openStr.length;
+            continue;
+        }
+        // Find end of opening tag — scan for > not inside quotes
+        let end = -1, inQ = false, qChar = "";
+        for (let i = start; i < xml.length; i++) {
+            const c = xml[i];
+            if (!inQ && (c === "'" || c === '"')) { inQ = true; qChar = c; }
+            else if (inQ && c === qChar) { inQ = false; }
+            else if (!inQ && c === ">") { end = i; break; }
+        }
         if (end === -1) { out += xml.slice(p); break; }
         const tag = xml.slice(start, end + 1);
-        // Check if this tag has the required attribute and not yet patched
-        if (tag.indexOf(requiredAttr + "=") !== -1 && tag.indexOf(' tex=') === -1) {
-            // Inject before closing > or />
-            const closePos = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
-            const newTag = tag.slice(0, closePos) +
+        // Patch only if has required attr and not already patched
+        if (tag.indexOf(requiredAttr + "=") !== -1 && tag.indexOf(" tex=") === -1) {
+            const isSelfClose = tag.endsWith("/>");
+            const insertAt = isSelfClose ? tag.length - 2 : tag.length - 1;
+            const newTag = tag.slice(0, insertAt) +
                 (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
                 (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
-                tag.slice(closePos);
+                tag.slice(insertAt);
             out += xml.slice(p, start) + newTag;
             p = end + 1;
+            return out + xml.slice(p); // inject once per equation, return early
         } else {
             out += xml.slice(p, end + 1);
             p = end + 1;
@@ -1599,12 +1622,17 @@ async function processXML(rawXML, filename, reqId) {
     // Elsevier XMLs are 200KB+ due to full bibliography (158+ refs)
     // and body text. Equations only appear in <ce:floats> and captions.
     // Extract only the parts that contain equations to reduce memory use.
-    if (cleanXML.indexOf("<ce:") !== -1 || cleanXML.indexOf(" ce:") !== -1) {
+    // For Elsevier: strip bibliography ONLY for JSDOM parsing (memory reduction)
+    // Keep originalCleanXML intact — output XML is built from this, not the stripped version
+    let jsdomXML = cleanXML; // XML fed to JSDOM (may be stripped for Elsevier)
+    const isElsevier = cleanXML.indexOf("<ce:") !== -1 || cleanXML.indexOf(" ce:") !== -1;
+    if (isElsevier) {
         try {
             const stripped = stripElsevierBibliography(cleanXML);
             if (stripped.length < cleanXML.length * 0.8) {
-                console.log(`  [INFO] Elsevier XML reduced: ${cleanXML.length} → ${stripped.length} chars`);
-                cleanXML = stripped;
+                console.log(`  [INFO] Elsevier jsdom XML reduced: ${cleanXML.length} → ${stripped.length} chars`);
+                jsdomXML = stripped; // only JSDOM gets the stripped version
+                // cleanXML stays intact for output
             }
         } catch (_) {}
     }
@@ -1680,6 +1708,9 @@ async function processXML(rawXML, filename, reqId) {
         return xml.replace(fullTag, newTag);
     }
 
+    // Inject namespaces on jsdomXML (for JSDOM parsing)
+    jsdomXML = injectNamespaces(jsdomXML);
+    // Also inject on cleanXML (for output patching)
     cleanXML = injectNamespaces(cleanXML);
 
     // ── Parse with fallback strategy ─────────────────────────────
@@ -1687,7 +1718,7 @@ async function processXML(rawXML, filename, reqId) {
 
     // Strategy 1: strict XML parser (best — preserves namespaces)
     try {
-        dom      = new JSDOM(cleanXML, Object.assign(
+        dom      = new JSDOM(jsdomXML, Object.assign(
             { contentType: "application/xml" },
             BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
         ));
@@ -1702,7 +1733,7 @@ async function processXML(rawXML, filename, reqId) {
         console.log("  [INFO] Trying HTML parser...");
         // Strategy 2: HTML parser — more lenient, handles broken XML
         try {
-            dom      = new JSDOM(cleanXML, Object.assign(
+            dom      = new JSDOM(jsdomXML, Object.assign(
                 { contentType: "text/html" },
                 BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
             ));
@@ -2166,17 +2197,24 @@ async function processXML(rawXML, filename, reqId) {
     txtLines.push(SEP);
 
     // ── Build modified XML ───────────────────────────────────────
-    // Use DOM serializer — DOM is already small (Elsevier bib stripped before parse)
-    // Serializing 150-200KB stripped DOM takes < 500ms, not 5-15s
+    // Strategy: patch the ORIGINAL cleanXML string (with bibliography intact)
+    // with the tex/alttext values extracted from the DOM.
+    // This preserves bibliography and all content that was stripped for JSDOM.
     let xmlContent = null;
     if (xmlModified) {
         try {
-            const serializer = new dom.window.XMLSerializer();
-            xmlContent = serializer.serializeToString(document);
-            console.log(`[OK] XML serialized — ${xmlContent.length} chars`);
+            xmlContent = patchXMLString(cleanXML, equations);
+            console.log(`[OK] XML patched from original — ${xmlContent.length} chars`);
         } catch(e) {
-            console.error(`[ERROR] XML serialization failed: ${e.message}`);
-            xmlContent = null;
+            console.error(`[ERROR] patchXMLString failed: ${e.message} — falling back to DOM serializer`);
+            try {
+                const serializer = new dom.window.XMLSerializer();
+                xmlContent = serializer.serializeToString(document);
+                console.log(`[OK] DOM serializer fallback — ${xmlContent.length} chars`);
+            } catch(e2) {
+                console.error(`[ERROR] DOM serializer also failed: ${e2.message}`);
+                xmlContent = null;
+            }
         }
     }
 
