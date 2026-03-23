@@ -29,9 +29,9 @@ const EventEmitter = require("events");
 // Per-request progress emitter
 // Key: requestId, Value: EventEmitter
 const progressEmitters = new Map();
-function emitProgress(reqId, step, label, pct) {
+function emitProgress(reqId, step, label, pct, extra) {
     const emitter = progressEmitters.get(reqId);
-    if (emitter) emitter.emit("progress", { step, label, pct });
+    if (emitter) emitter.emit("progress", { step, label, pct, ...( extra || {}) });
 }
 
 /* ================================================================
@@ -1446,10 +1446,11 @@ function stripElsevierBibliography(xml) {
 }
 
 
-async function processBatch(items, fn, batchSize) {
+async function processBatch(items, fn, batchSize, onBatchDone) {
     const sz = batchSize || CONFIG.WIRIS_BATCH_SIZE || 5;
     for (let i = 0; i < items.length; i += sz) {
         await Promise.all(items.slice(i, i + sz).map(fn));
+        if (onBatchDone) onBatchDone(Math.min(i + sz, items.length), items.length);
     }
 }
 
@@ -1543,7 +1544,7 @@ function escapeXmlAttr(str) {
     return str.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
-async function processXML(rawXML, filename) {
+async function processXML(rawXML, filename, reqId) {
 
     // ── Fast pre-check: does this XML contain any equations? ─────
     // If no math/formula tags found anywhere, skip heavy DOM parsing
@@ -1819,8 +1820,15 @@ async function processXML(rawXML, filename) {
         el.tagName.toLowerCase() === "inline-formula" ||
         el.tagName.toLowerCase() === "ce:inline-formula"
     );
+    const _totalEqs = inlineFormulas.length + dispFormulas.length;
+    let _doneEqs = 0;
     await processBatch([...inlineFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
-        async function(item){ await processFormula(item.eq, "Inline Equation", "JATS", `inline-${item.i+1}`); });
+        async function(item){ await processFormula(item.eq, "Inline Equation", "JATS", `inline-${item.i+1}`); },
+        CONFIG.WIRIS_BATCH_SIZE,
+        function(done) {
+            _doneEqs += Math.min(CONFIG.WIRIS_BATCH_SIZE, done);
+            if (typeof reqId !== "undefined") emitProgress(reqId, 2, `Converting equations... (${Math.min(_doneEqs, _totalEqs)}/${_totalEqs})`, 20 + Math.round(70 * _doneEqs / Math.max(_totalEqs, 1)), { eqDone: _doneEqs });
+        });
 
     // ── FORMAT 1: JATS disp-formula ──────────────────────────────
     const dispFormulas = allEls.filter(el =>
@@ -2158,19 +2166,17 @@ async function processXML(rawXML, filename) {
     txtLines.push(SEP);
 
     // ── Build modified XML ───────────────────────────────────────
-    // Fast approach: patch the original XML string directly instead of
-    // serializing the full DOM (serializeToString on 900KB DOM = 5-15s)
+    // Use DOM serializer — DOM is already small (Elsevier bib stripped before parse)
+    // Serializing 150-200KB stripped DOM takes < 500ms, not 5-15s
     let xmlContent = null;
     if (xmlModified) {
         try {
-            xmlContent = patchXMLString(cleanXML, equations);
-            console.log(`[OK] XML patched — length: ${xmlContent.length} chars`);
+            const serializer = new dom.window.XMLSerializer();
+            xmlContent = serializer.serializeToString(document);
+            console.log(`[OK] XML serialized — ${xmlContent.length} chars`);
         } catch(e) {
-            console.error(`[ERROR] XML patch failed: ${e.message} — falling back to serializer`);
-            try {
-                const serializer = new dom.window.XMLSerializer();
-                xmlContent = serializer.serializeToString(document);
-            } catch(e2) { xmlContent = null; }
+            console.error(`[ERROR] XML serialization failed: ${e.message}`);
+            xmlContent = null;
         }
     }
 
@@ -3255,7 +3261,7 @@ app.post("/process", upload.single("file"), async (req, res) => {
 
     let result;
     try {
-        result = await processXML(cleanedXML, origName);
+        result = await processXML(cleanedXML, origName, reqId);
     } catch (e) {
         clearTimeout(reqTimeout);
         console.error("[ERROR] processXML failed:", e.message);
@@ -3267,21 +3273,30 @@ app.post("/process", upload.single("file"), async (req, res) => {
         });
     }
 
-    emitProgress(reqId, 3, `Equations converted (${result.equations ? result.equations.length : 0}) — building output files...`, 96);
+    const eqCount = result.equations ? result.equations.length : 0;
+    const eqDone  = result.equations ? result.equations.filter(e => e.texStatus === "OK").length : 0;
+    emitProgress(reqId, 3, `${eqCount} equations converted (${eqDone} TeX OK) — serializing XML...`, 96);
 
     // Restore original DOCTYPE in output XML
-    // Works whether XML was modified or not
     if (originalDoctype) {
         const xmlToFix = result.xmlContent || cleanedXML;
+        console.log(`[DEBUG] xmlContent exists: ${!!result.xmlContent}, length: ${xmlToFix ? xmlToFix.length : 0}`);
+        console.log(`[DEBUG] xmlToFix starts with: ${xmlToFix ? xmlToFix.substring(0,80) : 'null'}`);
         let fixed;
-        if (xmlToFix.startsWith('<?xml')) {
+        if (xmlToFix && xmlToFix.startsWith('<?xml')) {
             const declEnd = xmlToFix.indexOf('?>') + 2;
             fixed = xmlToFix.slice(0, declEnd) + '\n' + originalDoctype + xmlToFix.slice(declEnd);
+        } else if (xmlToFix) {
+            // Prepend xml declaration if missing
+            fixed = '<?xml version="1.0" encoding="utf-8"?>\n' + originalDoctype + '\n' + xmlToFix;
         } else {
-            fixed = originalDoctype + '\n' + xmlToFix;
+            fixed = originalDoctype + '\n';
         }
         result.xmlContent = fixed;
-        console.log(`[INFO] DOCTYPE restored in output XML (${originalDoctype.length} chars)`);
+        console.log(`[INFO] DOCTYPE restored — output XML length: ${fixed.length}`);
+        console.log(`[DEBUG] Output XML starts with: ${fixed.substring(0,120)}`);
+    } else {
+        console.log('[DEBUG] No DOCTYPE header received — skipping restore');
     }
 
     // Ensure OUTPUT folder exists (re-check at request time)
