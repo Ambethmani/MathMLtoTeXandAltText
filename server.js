@@ -3233,16 +3233,23 @@ app.post("/process", upload.single("file"), async (req, res) => {
     if (!rawXML || !rawXML.trim()) {
         return res.status(400).json({ success: false, error: "File is empty." });
     }
-    // Restore original DOCTYPE — browser stripped it to bypass WAF
-    // Sent as base64-encoded X-Original-Doctype header (WAF doesn't scan headers for XXE)
+    // Extract original DOCTYPE from rawXML on the server
+    // Much more reliable than depending on browser header (Render proxy may strip headers)
     let originalDoctype = null;
-    const doctypeHeader = req.headers['x-original-doctype'];
-    if (doctypeHeader) {
-        try {
-            originalDoctype = Buffer.from(doctypeHeader, 'base64').toString('utf8');
-            console.log(`[INFO] DOCTYPE received from header (${originalDoctype.length} chars)`);
-        } catch(e) {
-            console.log('[WARN] Could not decode DOCTYPE header:', e.message);
+    const dtStart = rawXML.indexOf('<!DOCTYPE');
+    if (dtStart !== -1) {
+        const bracketOpen  = rawXML.indexOf('[', dtStart);
+        const firstGT      = rawXML.indexOf('>', dtStart);
+        if (bracketOpen !== -1 && bracketOpen < firstGT) {
+            const bracketClose = rawXML.indexOf(']>', bracketOpen);
+            if (bracketClose !== -1) {
+                originalDoctype = rawXML.slice(dtStart, bracketClose + 2);
+            }
+        } else if (firstGT !== -1) {
+            originalDoctype = rawXML.slice(dtStart, firstGT + 1);
+        }
+        if (originalDoctype) {
+            console.log(`[INFO] DOCTYPE extracted from rawXML (${originalDoctype.length} chars)`);
         }
     }
     const fileSizeKB = Math.round(rawXML.length / 1024);
