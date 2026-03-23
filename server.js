@@ -297,7 +297,7 @@ const CONFIG = {
 
     // Timeout per WIRIS call (ms)
     // 8 seconds per equation — enough for slow network on cloud
-    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "8000"),
+    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "4000"),
 
     // No equation limit — process ALL equations through WIRIS
     WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "99999"),
@@ -311,6 +311,10 @@ const CONFIG = {
 };
 
 /* ── WIRIS API CALL ────────────────────────────────────────── */
+// Persistent HTTPS agent — reuses TCP connections to WIRIS (saves ~200ms per call)
+const _httpsAgent = new (require("https").Agent)({ keepAlive: true, maxSockets: 15 });
+const _httpAgent  = new (require("http").Agent)({ keepAlive: true, maxSockets: 15 });
+
 async function callWirisAPI(mathmlStr) {
     return new Promise((resolve, reject) => {
         try {
@@ -328,7 +332,8 @@ async function callWirisAPI(mathmlStr) {
                     "Content-Type":   "application/x-www-form-urlencoded",
                     "Content-Length": Buffer.byteLength(postData)
                 },
-                timeout: CONFIG.WIRIS_TIMEOUT
+                timeout: CONFIG.WIRIS_TIMEOUT,
+                agent:   isHttps ? _httpsAgent : _httpAgent
             };
 
             const req = lib.request(options, (res) => {
@@ -370,7 +375,7 @@ async function callWirisAPI(mathmlStr) {
                         !/[a-zA-Z0-9]/.test(trimmed);
 
                     if (res.statusCode === 200 && trimmed && !isWirisError) {
-                        resolve(trimmed);
+                        resolve(trimmed); // cache stored below in generateTeX
                     } else if (isWirisError) {
                         reject(new Error(`WIRIS conversion error: ${trimmed.substring(0, 100)}`));
                     } else {
@@ -551,42 +556,278 @@ function prepareMathML(mathNode) {
 }
 
 /* ── FALLBACK: mathml-to-latex ─────────────────────────────── */
-function generateTeXFallback(mathmlStr, mathNode) {
-    try {
-        const tex = MathMLToLaTeX.convert(mathmlStr);
-        if (!tex || tex.trim() === "") {
-            const complexity = analyzeMathMLComplexity(mathNode);
-            return {
-                value:      "",
-                status:     "WARN",
-                engine:     "mathml-to-latex (fallback)",
-                reason:     "mathml-to-latex returned empty string",
-                complexity
-            };
+/* ================================================================
+   SPRINGER TEX WALKER
+   Converts MathML DOM nodes to TeX using structural walking.
+   Matches Springer's exact TeX output requirements.
+   Used as a secondary fallback after mathml-to-latex.
+================================================================ */
+function springerTeXWalker(mathNode) {
+    function walk(node) {
+        if (!node) return "";
+        if (node.nodeType === 3) return node.textContent; // text node
+
+        const name = (node.nodeName || "").toLowerCase().replace(/^mml:/, "");
+
+        switch (name) {
+            case "math":
+            case "mrow":
+            case "mstyle":
+            case "mpadded":
+            case "mphantom":
+            case "merror":
+                return [...node.childNodes].map(walk).join("");
+
+            case "mi":
+                // Italic identifiers — wrap in braces
+                return `{${node.textContent}}`;
+
+            case "mn":
+                // Numbers — wrap in braces
+                return `{${node.textContent}}`;
+
+            case "mo": {
+                // Operators — map special Unicode to TeX
+                const op = node.textContent.trim();
+                const opMap = {
+                    "∑": "\\sum", "∏": "\\prod", "∫": "\\int",
+                    "∬": "\\iint", "∭": "\\iiint", "∮": "\\oint",
+                    "∞": "\\infty", "±": "\\pm", "∓": "\\mp",
+                    "×": "\\times", "÷": "\\div", "·": "\\cdot",
+                    "≤": "\\leq", "≥": "\\geq", "≠": "\\neq",
+                    "≈": "\\approx", "∼": "\\sim", "≡": "\\equiv",
+                    "∈": "\\in", "∉": "\\notin", "⊂": "\\subset",
+                    "⊃": "\\supset", "∩": "\\cap", "∪": "\\cup",
+                    "→": "\\rightarrow", "←": "\\leftarrow",
+                    "↔": "\\leftrightarrow", "⇒": "\\Rightarrow",
+                    "⇔": "\\Leftrightarrow", "∂": "\\partial",
+                    "∇": "\\nabla", "√": "\\sqrt", "α": "\\alpha",
+                    "β": "\\beta", "γ": "\\gamma", "δ": "\\delta",
+                    "ε": "\\epsilon", "ζ": "\\zeta", "η": "\\eta",
+                    "θ": "\\theta", "λ": "\\lambda", "μ": "\\mu",
+                    "ν": "\\nu", "π": "\\pi", "ρ": "\\rho",
+                    "σ": "\\sigma", "τ": "\\tau", "φ": "\\phi",
+                    "χ": "\\chi", "ψ": "\\psi", "ω": "\\omega",
+                    "Γ": "\\Gamma", "Δ": "\\Delta", "Θ": "\\Theta",
+                    "Λ": "\\Lambda", "Π": "\\Pi", "Σ": "\\Sigma",
+                    "Φ": "\\Phi", "Ψ": "\\Psi", "Ω": "\\Omega",
+                    "∀": "\\forall", "∃": "\\exists", "¬": "\\neg",
+                    "∧": "\\wedge", "∨": "\\vee", "⊕": "\\oplus",
+                    "⊗": "\\otimes", "′": "'", "″": "''",
+                    "(": "(", ")": ")", "[": "[", "]": "]",
+                    "{": "\\{", "}": "\\}", "|": "|",
+                    "‖": "\\|", "⟨": "\\langle", "⟩": "\\rangle",
+                };
+                return opMap[op] !== undefined ? opMap[op] : op;
+            }
+
+            case "msub":
+                if (node.children.length >= 2)
+                    return `{${walk(node.children[0])}}_{${walk(node.children[1])}}`;
+                return [...node.childNodes].map(walk).join("");
+
+            case "msup":
+                if (node.children.length >= 2)
+                    return `{${walk(node.children[0])}}^{${walk(node.children[1])}}`;
+                return [...node.childNodes].map(walk).join("");
+
+            case "msubsup":
+                if (node.children.length >= 3)
+                    return `{${walk(node.children[0])}}_{${walk(node.children[1])}}^{${walk(node.children[2])}}`;
+                return [...node.childNodes].map(walk).join("");
+
+            case "mfrac":
+                if (node.children.length >= 2)
+                    return `\\frac{${walk(node.children[0])}}{${walk(node.children[1])}}`;
+                return [...node.childNodes].map(walk).join("");
+
+            case "msqrt":
+                if (node.children.length === 1)
+                    return `\\sqrt{${walk(node.children[0])}}`;
+                return `\\sqrt{${[...node.children].map(walk).join("")}}`;
+
+            case "mroot":
+                if (node.children.length >= 2)
+                    return `\\sqrt[${walk(node.children[1])}]{${walk(node.children[0])}}`;
+                return [...node.childNodes].map(walk).join("");
+
+            case "munderover":
+                if (node.children.length >= 3) {
+                    const base = walk(node.children[0]);
+                    const under = walk(node.children[1]);
+                    const over  = walk(node.children[2]);
+                    // Check if base is a sum/integral-like operator
+                    const baseText = node.children[0].textContent.trim();
+                    if (["∑","∏","∫","∮","⋃","⋂"].includes(baseText)) {
+                        return `${base}_{${under}}^{${over}}`;
+                    }
+                    return `\\overset{${over}}{\\underset{${under}}{${base}}}`;
+                }
+                return [...node.childNodes].map(walk).join("");
+
+            case "munder":
+                if (node.children.length >= 2) {
+                    const base  = walk(node.children[0]);
+                    const under = walk(node.children[1]);
+                    const baseText = node.children[0].textContent.trim();
+                    if (["∑","∏","∫","∮","lim"].includes(baseText) ||
+                        node.children[0].textContent.includes("lim")) {
+                        return `${base}_{${under}}`;
+                    }
+                    return `\\underset{${under}}{${base}}`;
+                }
+                return [...node.childNodes].map(walk).join("");
+
+            case "mover":
+                if (node.children.length >= 2) {
+                    const base = walk(node.children[0]);
+                    const over = node.children[1].textContent.trim();
+                    const accentMap = {
+                        "−": `\\bar{${base}}`, "‾": `\\bar{${base}}`,
+                        "¯": `\\bar{${base}}`, "˙": `\\dot{${base}}`,
+                        "¨": `\\ddot{${base}}`, "˜": `\\tilde{${base}}`,
+                        "^": `\\hat{${base}}`, "→": `\\vec{${base}}`,
+                        "⃗": `\\vec{${base}}`, "∘": `\\mathring{${base}}`,
+                        "⌢": `\\widehat{${base}}`,
+                    };
+                    if (accentMap[over]) return accentMap[over];
+                    // Check accent attribute
+                    if (node.getAttribute && node.getAttribute("accent") === "true") {
+                        return `\\overset{${walk(node.children[1])}}{${base}}`;
+                    }
+                    return `\\overset{${walk(node.children[1])}}{${base}}`;
+                }
+                return [...node.childNodes].map(walk).join("");
+
+            case "mfenced": {
+                const open  = node.getAttribute("open")  !== null ? node.getAttribute("open")  : "(";
+                const close = node.getAttribute("close") !== null ? node.getAttribute("close") : ")";
+                const sep   = node.getAttribute("separators") || ",";
+                const kids  = [...node.children].map(walk);
+                const openTex  = open  === "{" ? "\\{" : open  === "⟨" ? "\\langle" : open;
+                const closeTex = close === "}" ? "\\}" : close === "⟩" ? "\\rangle" : close;
+                return `\\left${openTex}${kids.join(sep)}\\right${closeTex}`;
+            }
+
+            case "mtable": {
+                const rows = [...node.children].map(row => {
+                    const cells = [...row.children].map(cell =>
+                        [...cell.childNodes].map(walk).join("")
+                    );
+                    return cells.join(" & ");
+                });
+                return `\\begin{matrix}${rows.join(" \\\\ ")}\\end{matrix}`;
+            }
+
+            case "mtext": {
+                const txt = node.textContent;
+                if (txt.trim() === "") return "\\,";
+                return `\\text{${txt}}`;
+            }
+
+            case "mspace": {
+                const w = node.getAttribute("width") || "";
+                if (w.includes("thin") || w === "0.167em") return "\\,";
+                if (w.includes("med")  || w === "0.222em") return "\\:";
+                if (w.includes("thick")|| w === "0.278em") return "\\;";
+                if (parseFloat(w) <= 0) return "\\!";
+                return "\\,";
+            }
+
+            case "semantics":
+                // Use first child (presentation MathML), skip annotation
+                if (node.children.length > 0) return walk(node.children[0]);
+                return "";
+
+            case "annotation":
+            case "annotation-xml":
+                return ""; // skip TeX/XML annotations
+
+            case "menclose": {
+                const notation = node.getAttribute("notation") || "box";
+                const inner = [...node.childNodes].map(walk).join("");
+                if (notation.includes("radical")) return `\\sqrt{${inner}}`;
+                return `\\boxed{${inner}}`;
+            }
+
+            default:
+                return [...node.childNodes].map(walk).join("");
         }
-        const cleanTex = postProcessTeX(tex);
+    }
+
+    try {
+        const result = walk(mathNode);
+        if (!result || !result.trim()) {
+            return { value: "", status: "WARN", engine: "springer-walker", reason: "walker returned empty" };
+        }
         return {
-            value:  cleanTex,
+            value:  postProcessTeX(result),
             status: "OK",
-            engine: "mathml-to-latex (fallback)",
-            reason: "",
-            complexity: null
+            engine: "springer-walker",
+            reason: "structural MathML walk (Springer format)"
         };
-    } catch (err) {
-        const complexity = analyzeMathMLComplexity(mathNode);
-        return {
-            value:      "",
-            status:     "ERROR",
-            engine:     "mathml-to-latex (fallback)",
-            reason:     err.message || String(err),
-            complexity
-        };
+    } catch (e) {
+        return { value: "", status: "FAIL", engine: "springer-walker", reason: "walker error: " + e.message };
     }
 }
 
+function generateTeXFallback(mathmlStr, mathNode) {
+    // Chain: mathml-to-latex → springer-walker → empty
+    try {
+        const tex = MathMLToLaTeX.convert(mathmlStr);
+        if (tex && tex.trim()) {
+            const cleanTex = postProcessTeX(tex);
+            // Sanity-check: reject garbage output
+            const STALE = ["error converting from mathml to latex","error converting",
+                           "error processing","invalid mathml","cannot convert"];
+            const lower = cleanTex.toLowerCase();
+            if (!STALE.some(s => lower.includes(s))) {
+                return {
+                    value:  cleanTex,
+                    status: "OK",
+                    engine: "mathml-to-latex",
+                    reason: "mathml-to-latex fallback",
+                    wirisAttempted: false
+                };
+            }
+        }
+    } catch (_) {}
+
+    // mathml-to-latex failed or returned garbage — try Springer structural walker
+    if (mathNode) {
+        const walkerResult = springerTeXWalker(mathNode);
+        if (walkerResult.status === "OK" && walkerResult.value) {
+            console.log("  [TEX] springer-walker succeeded as second fallback");
+            return { ...walkerResult, wirisAttempted: false };
+        }
+    }
+
+    // All fallbacks exhausted
+    const complexity = analyzeMathMLComplexity(mathNode);
+    return {
+        value:      "",
+        status:     "WARN",
+        engine:     "fallback-chain",
+        reason:     "all fallbacks exhausted (mathml-to-latex + springer-walker)",
+        complexity,
+        wirisAttempted: false
+    };
+}
+
 /* ── MAIN generateTeX — async, tries WIRIS then falls back ── */
+// In-request TeX cache — skip WIRIS for duplicate equations in same file
+const _texCache = new Map();
+
 async function generateTeX(mathNode) {
     const mathmlStr = prepareMathML(mathNode);
+
+    // Check cache first — large files often have repeated equations
+    const cacheKey = mathmlStr.replace(/\s+/g, "");
+    if (_texCache.has(cacheKey)) {
+        const cached = _texCache.get(cacheKey);
+        console.log("  [TEX] cache hit — skipping WIRIS");
+        return { ...cached, reason: cached.reason + " (cached)" };
+    }
 
     // ── WIRIS disabled — use mathml-to-latex directly ──────────
     if (!CONFIG.WIRIS_ENABLED) {
@@ -594,6 +835,27 @@ async function generateTeX(mathNode) {
         if (CONFIG.LOG_ENGINE_USED)
             console.log(`  [TEX] mathml-to-latex (WIRIS disabled)`);
         return result;
+    }
+
+    // ── Fast-path: trivially simple equations ─────────────────
+    // Single number, variable, or operator — skip WIRIS entirely
+    // e.g. <math><mi>x</mi></math> → just "x"
+    {
+        const allChildren = mathNode ? [...mathNode.getElementsByTagName("*")] : [];
+        const meaningfulTags = allChildren.filter(n => {
+            const t = n.tagName.toLowerCase().replace(/^mml:/,"");
+            return !["math","mrow","semantics","annotation","annotation-xml"].includes(t);
+        });
+        if (meaningfulTags.length === 1) {
+            const t   = meaningfulTags[0].tagName.toLowerCase().replace(/^mml:/,"");
+            const val = meaningfulTags[0].textContent.trim();
+            if (["mi","mn","mo"].includes(t) && val && val.length <= 3) {
+                console.log(`  [TEX] fast-path: "${val}"`);
+                const fastResult = { value: val, status: "OK", engine: "fast-path", reason: "single token", wirisAttempted: false };
+                _texCache.set(cacheKey, fastResult);
+                return fastResult;
+            }
+        }
     }
 
     // All equations go through WIRIS for maximum accuracy
@@ -620,7 +882,7 @@ async function generateTeX(mathNode) {
         if (CONFIG.LOG_ENGINE_USED)
             console.log(`  [TEX] WIRIS OK — ${cleanTex2.substring(0, 60)}${cleanTex2.length > 60 ? "..." : ""}`);
 
-        return {
+        const result = {
             value:          cleanTex2,
             status:         "OK",
             engine:         "WIRIS/MathType API",
@@ -629,6 +891,8 @@ async function generateTeX(mathNode) {
             wirisAttempted: true,
             wirisResult:    "success"
         };
+        _texCache.set(cacheKey, result);
+        return result;
 
     } catch (wirisErr) {
         // ── WIRIS failed — automatically use mathml-to-latex ───
@@ -1126,56 +1390,52 @@ function stripDOCTYPE(xml) {
    Safe even when bibliography titles contain equations (rare but possible).
    Approach: strip individual bib entries that have no math, keep ones that do. */
 function stripElsevierBibliography(xml) {
-    let result = xml;
-    const before = result.length;
+    const before = xml.length;
     let stripped = 0;
 
-    // Strip individual <ce:bib-reference> entries with no math
-    result = result.replace(/<ce:bib-reference[^>]*>[\s\S]*?<\/ce:bib-reference>/g,
-        function(match) {
-            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
-                return match; // KEEP — has equation in title
-            }
-            stripped++;
-            return ""; // strip — pure text reference
+    function stripTag(src, openTag, closeTag) {
+        let out = "", p = 0;
+        while (p < src.length) {
+            const start = src.indexOf(openTag, p);
+            if (start === -1) { out += src.slice(p); break; }
+            out += src.slice(p, start);
+            const end = src.indexOf(closeTag, start + openTag.length);
+            if (end === -1) { out += src.slice(start); break; }
+            const block = src.slice(start, end + closeTag.length);
+            if (block.indexOf("<mml:math") !== -1 || block.indexOf("<math") !== -1) {
+                out += block;
+            } else { stripped++; }
+            p = end + closeTag.length;
         }
-    );
+        return out;
+    }
 
-    // Strip individual <sb:reference> entries with no math
-    result = result.replace(/<sb:reference[^>]*>[\s\S]*?<\/sb:reference>/g,
-        function(match) {
-            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
-                return match;
-            }
+    let result = xml;
+    result = stripTag(result, "<ce:bib-reference", "</ce:bib-reference>");
+    result = stripTag(result, "<sb:reference",     "</sb:reference>");
+
+    const sOpen  = result.indexOf("<ce:sections");
+    const sClose = result.lastIndexOf("</ce:sections>");
+    if (sOpen !== -1 && sClose !== -1 && sClose > sOpen) {
+        const sect = result.slice(sOpen, sClose + 14);
+        if (sect.indexOf("<mml:math") === -1 && sect.indexOf("<math") === -1) {
+            result = result.slice(0, sOpen) + "<ce:sections/>" + result.slice(sClose + 14);
             stripped++;
-            return "";
         }
-    );
+    }
 
-    // Collapse now-empty wrapper tags
-    result = result.replace(/<ce:bibliography([^>]*)>\s*<\/ce:bibliography>/g,
-                            "<ce:bibliography$1/>");
-    result = result.replace(/<ce:bibliography-sec([^>]*)>\s*<\/ce:bibliography-sec>/g,
-                            "<ce:bibliography-sec$1/>");
-    result = result.replace(/<tail>\s*<\/tail>/g, "<tail/>");
-
-    // Strip ce:sections prose ONLY if it has no math
-    result = result.replace(/<ce:sections[^>]*>[\s\S]*?<\/ce:sections>/g,
-        function(match) {
-            if (match.indexOf("<mml:math") !== -1 || match.indexOf("<math") !== -1) {
-                return match; // keep — has inline equations in body
-            }
-            stripped++;
-            return "<ce:sections/>"; // strip — pure prose
-        }
-    );
+    const tOpen = result.indexOf("<tail>"), tClose = result.indexOf("</tail>");
+    if (tOpen !== -1 && tClose > tOpen) {
+        const inner = result.slice(tOpen + 6, tClose).trim();
+        if (!inner || inner.indexOf("<ce:bib") === -1)
+            result = result.slice(0, tOpen) + "<tail/>" + result.slice(tClose + 7);
+    }
 
     const saved = Math.round((before - result.length) / 1024);
-    if (saved > 0) {
-        console.log(`  [INFO] Elsevier strip: ${before} → ${result.length} chars, saved ${saved}KB, removed ${stripped} items`);
-    }
+    if (saved > 0) console.log(`  [INFO] Elsevier strip: ${before} -> ${result.length} chars, saved ${saved}KB, removed ${stripped} items`);
     return result;
 }
+
 
 async function processBatch(items, fn, batchSize) {
     const sz = batchSize || CONFIG.WIRIS_BATCH_SIZE || 5;
@@ -1489,14 +1749,35 @@ async function processXML(rawXML, filename) {
         }
         let texVal = "";
         let texStatus = "OK", texReason = "";
+
+        // ── Springer TeX: use structural walker exclusively ──────
+        // Priority 1: pre-extracted TEX source in XML (most reliable)
         const texNode = eq.querySelector('EquationSource[Format="TEX"]');
         if (texNode && texNode.firstChild && texNode.firstChild.nodeValue.trim()) {
-            texVal = texNode.firstChild.nodeValue.trim();
-            texStatus = "OK"; texReason = "from EquationSource[Format=TEX]";
+            texVal    = texNode.firstChild.nodeValue.trim();
+            texStatus = "OK";
+            texReason = "EquationSource[Format=TEX]";
+            console.log(`  [TEX] Springer pre-extracted TeX — ${label}`);
         }
-        if (!texVal) {
+
+        // Priority 2: Springer structural MathML walker (exact Springer output format)
+        if (!texVal && math) {
+            const walkerRes = springerTeXWalker(math);
+            if (walkerRes.status === "OK" && walkerRes.value) {
+                texVal    = walkerRes.value;
+                texStatus = "OK";
+                texReason = "springer-walker";
+                console.log(`  [TEX] Springer walker — ${label}`);
+            }
+        }
+
+        // Priority 3: WIRIS as last resort only if walker produced nothing
+        if (!texVal && math) {
+            console.log(`  [TEX] Walker empty for ${label} — falling back to WIRIS`);
             const texRes = await generateTeX(math);
-            texVal = texRes.value; texStatus = texRes.status; texReason = texRes.reason;
+            texVal    = texRes.value;
+            texStatus = texRes.status;
+            texReason = texRes.reason + " (WIRIS fallback)";
         }
         const altRes = generateAltText(math);
         const eqEls2 = [...eq.getElementsByTagName("*")];
@@ -1877,21 +2158,106 @@ app.get("/ui", (req, res) => {
   --radius-sm:7px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Geist',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;overflow-x:hidden}
+body{
+  font-family:'Geist',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  line-height:1.5;
+  overflow-x:hidden;
+}
 
-/* Drifting orb background */
+/* ── Base background: subtle radial vignette ──────────────── */
+body::before{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(59,130,246,0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(139,92,246,0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 60% at 0% 60%, rgba(16,185,129,0.04) 0%, transparent 50%);
+}
+
+/* ── Dot grid overlay ─────────────────────────────────────── */
+body::after{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:radial-gradient(circle, rgba(255,255,255,0.055) 1px, transparent 1px);
+  background-size:28px 28px;
+  mask-image:radial-gradient(ellipse 90% 90% at 50% 50%, black 30%, transparent 100%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 90% at 50% 50%, black 30%, transparent 100%);
+}
+
+/* ── Drifting orbs ────────────────────────────────────────── */
 .orb-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
-.orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.55}
-.orb-1{width:520px;height:520px;background:radial-gradient(circle,rgba(59,130,246,0.22),transparent 70%);top:-160px;left:-100px;animation:drift1 18s ease-in-out infinite}
-.orb-2{width:440px;height:440px;background:radial-gradient(circle,rgba(139,92,246,0.18),transparent 70%);top:30%;right:-140px;animation:drift2 22s ease-in-out infinite}
-.orb-3{width:360px;height:360px;background:radial-gradient(circle,rgba(16,185,129,0.14),transparent 70%);bottom:-80px;left:30%;animation:drift3 16s ease-in-out infinite}
-.orb-4{width:280px;height:280px;background:radial-gradient(circle,rgba(245,158,11,0.1),transparent 70%);top:55%;left:15%;animation:drift4 20s ease-in-out infinite}
-@keyframes drift1{0%,100%{transform:translate(0,0)}25%{transform:translate(40px,-30px)}50%{transform:translate(80px,20px)}75%{transform:translate(20px,50px)}}
-@keyframes drift2{0%,100%{transform:translate(0,0)}25%{transform:translate(-50px,30px)}50%{transform:translate(-20px,-40px)}75%{transform:translate(-60px,10px)}}
-@keyframes drift3{0%,100%{transform:translate(0,0)}33%{transform:translate(-30px,-25px)}66%{transform:translate(40px,-10px)}}
-@keyframes drift4{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-40px)}}
+.orb{position:absolute;border-radius:50%;filter:blur(90px)}
+.orb-1{
+  width:600px;height:600px;
+  background:radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 65%);
+  top:-200px;left:-150px;
+  animation:drift1 20s ease-in-out infinite;
+}
+.orb-2{
+  width:500px;height:500px;
+  background:radial-gradient(circle, rgba(139,92,246,0.14) 0%, transparent 65%);
+  top:25%;right:-180px;
+  animation:drift2 25s ease-in-out infinite;
+}
+.orb-3{
+  width:420px;height:420px;
+  background:radial-gradient(circle, rgba(16,185,129,0.11) 0%, transparent 65%);
+  bottom:-100px;left:35%;
+  animation:drift3 18s ease-in-out infinite;
+}
+.orb-4{
+  width:320px;height:320px;
+  background:radial-gradient(circle, rgba(245,158,11,0.08) 0%, transparent 65%);
+  top:60%;left:10%;
+  animation:drift4 22s ease-in-out infinite;
+}
+.orb-5{
+  width:240px;height:240px;
+  background:radial-gradient(circle, rgba(236,72,153,0.07) 0%, transparent 65%);
+  top:20%;left:45%;
+  animation:drift5 28s ease-in-out infinite;
+}
 
-/* Ensure all content sits above orbs */
+@keyframes drift1{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(50px,-35px)}
+  50%{transform:translate(90px,25px)}
+  75%{transform:translate(25px,55px)}
+}
+@keyframes drift2{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(-55px,35px)}
+  50%{transform:translate(-25px,-45px)}
+  75%{transform:translate(-65px,15px)}
+}
+@keyframes drift3{
+  0%,100%{transform:translate(0,0)}
+  33%{transform:translate(-35px,-30px)}
+  66%{transform:translate(50px,-15px)}
+}
+@keyframes drift4{
+  0%,100%{transform:translate(0,0)}
+  50%{transform:translate(35px,-50px)}
+}
+@keyframes drift5{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(-20px,30px)}
+  50%{transform:translate(30px,20px)}
+  75%{transform:translate(-30px,-20px)}
+}
+
+/* ── Noise texture overlay ────────────────────────────────── */
+.noise{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  opacity:0.025;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size:200px 200px;
+}
+
+/* All content above background layers */
 nav,.wrap{position:relative;z-index:1}
 
 /* ── Nav ─────────────────────────────────────────────── */
@@ -2181,7 +2547,9 @@ nav{
   <div class="orb orb-2"></div>
   <div class="orb orb-3"></div>
   <div class="orb orb-4"></div>
+  <div class="orb orb-5"></div>
 </div>
+<div class="noise"></div>
 
 <div class="wrap">
 <div class="grid">
@@ -2366,13 +2734,23 @@ nav{
   function handleFile(f) {
     if (!f.name.toLowerCase().endsWith('.xml')) { showError('Please select an .xml file.'); return; }
     selectedFile = f;
+    var sizeKB = f.size / 1024;
     document.getElementById('fileName').textContent = f.name;
-    document.getElementById('fileSize').textContent = (f.size/1024).toFixed(1) + ' KB';
+    document.getElementById('fileSize').textContent = sizeKB.toFixed(1) + ' KB';
     document.getElementById('fileInfo').style.display = 'block';
     document.getElementById('dropZone').style.display = 'none';
     document.getElementById('processBtn').disabled = false;
     document.getElementById('errorBox').style.display = 'none';
     document.getElementById('results').style.display = 'none';
+    // Warn for large files
+    if (sizeKB > 600) {
+      var box = document.getElementById('errorBox');
+      box.style.background = 'rgba(245,158,11,0.1)';
+      box.style.borderColor = 'rgba(245,158,11,0.3)';
+      box.style.color = '#f59e0b';
+      box.textContent = '\u26a0 Large file (' + Math.round(sizeKB) + ' KB) — processing may take 2-3 minutes on free tier.';
+      box.style.display = 'block';
+    }
   }
   function setFile(f) { handleFile(f); }
 
@@ -2661,7 +3039,28 @@ app.post("/process", upload.single("file"), async (req, res) => {
             console.log('[WARN] Could not decode DOCTYPE header:', e.message);
         }
     }
-    console.log(`[INFO] Received: ${origName} (${rawXML.length} chars)`);
+    const fileSizeKB = Math.round(rawXML.length / 1024);
+    console.log(`[INFO] Received: ${origName} (${fileSizeKB} KB)`);
+
+    // Warn on large files — Render free tier has 512MB RAM
+    if (rawXML.length > 800 * 1024) {
+        console.warn(`[WARN] Large file: ${fileSizeKB}KB — may be slow on free tier`);
+    }
+
+    // Hard timeout: kill request after 110s to prevent Render from crashing
+    // Render closes connections after 120s; we respond before that
+    let requestTimedOut = false;
+    const reqTimeout = setTimeout(() => {
+        requestTimedOut = true;
+        console.error(`[TIMEOUT] Request exceeded 110s — sending partial response`);
+        if (!res.headersSent) {
+            res.status(503).json({
+                success: false,
+                error: "Processing timeout — file may be too large or have too many equations. Try splitting the file.",
+                hint: "Render free tier has a 120s limit. Files > 500KB with 100+ equations may exceed this."
+            });
+        }
+    }, 110000);
 
     // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
     let cleanedXML = rawXML;
@@ -2684,7 +3083,9 @@ app.post("/process", upload.single("file"), async (req, res) => {
     try {
         result = await processXML(cleanedXML, origName);
     } catch (e) {
+        clearTimeout(reqTimeout);
         console.error("[ERROR] processXML failed:", e.message);
+        if (res.headersSent) return;
         return res.status(500).json({
             success: false,
             error: `Processing failed: ${e.message}`,
@@ -2748,6 +3149,9 @@ app.post("/process", upload.single("file"), async (req, res) => {
     } catch (e) {
         console.error(`[ERROR] Cannot save LOG: ${e.message}`);
     }
+
+    // Clear request timeout
+    clearTimeout(reqTimeout);
 
     // Clean up uploaded file from disk
     try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
