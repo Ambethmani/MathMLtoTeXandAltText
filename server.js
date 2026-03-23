@@ -1444,6 +1444,96 @@ async function processBatch(items, fn, batchSize) {
     }
 }
 
+/* ================================================================
+   FAST XML PATCHER
+   Instead of serializing the full DOM back to string (5-15s for large files),
+   patch only the specific img/math tags that had tex/alttext added.
+   Approach: find each target element by its unique attribute, inject new attrs.
+   Falls back to DOM serializer if patching fails for any equation.
+================================================================ */
+function patchXMLString(xml, equations) {
+    let result = xml;
+
+    for (const eq of equations) {
+        if (!eq.hasImg || !eq.writeTarget) continue;
+        if (eq.writeTarget === "none") continue;
+
+        const tex    = eq.tex    || "";
+        const alt    = eq.alt    || "";
+        if (!tex && !alt) continue;
+
+        if (eq.writeTarget === "math[@altimg]") {
+            // Find <math ... altimg="..."> and inject tex="" alttext=""
+            result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
+        } else {
+            // Find img/graphic tag — use eq.id or equation position to locate
+            // Try common img tag names
+            for (const tag of ["inline-graphic","graphic","img","ce:inline-graphic","ce:graphic"]) {
+                const patched = injectAttrsOnFirstUntaggedMatch(result, tag, tex, alt);
+                if (patched !== result) { result = patched; break; }
+            }
+        }
+    }
+    return result;
+}
+
+function injectAttrsOnTag(xml, tagName, requiredAttr, tex, alt) {
+    // Find <tagName ... requiredAttr="..."> that doesn't already have tex=""
+    let p = 0;
+    let out = "";
+    const openStr = "<" + tagName;
+    while (p < xml.length) {
+        const start = xml.indexOf(openStr, p);
+        if (start === -1) { out += xml.slice(p); break; }
+        // Find end of opening tag
+        const end = xml.indexOf(">", start);
+        if (end === -1) { out += xml.slice(p); break; }
+        const tag = xml.slice(start, end + 1);
+        // Check if this tag has the required attribute and not yet patched
+        if (tag.indexOf(requiredAttr + "=") !== -1 && tag.indexOf(' tex=') === -1) {
+            // Inject before closing > or />
+            const closePos = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
+            const newTag = tag.slice(0, closePos) +
+                (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
+                (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
+                tag.slice(closePos);
+            out += xml.slice(p, start) + newTag;
+            p = end + 1;
+        } else {
+            out += xml.slice(p, end + 1);
+            p = end + 1;
+        }
+    }
+    return out;
+}
+
+function injectAttrsOnFirstUntaggedMatch(xml, tagName, tex, alt) {
+    const openStr = "<" + tagName;
+    let p = 0;
+    while (p < xml.length) {
+        const start = xml.indexOf(openStr, p);
+        if (start === -1) break;
+        const end = xml.indexOf(">", start);
+        if (end === -1) break;
+        const tag = xml.slice(start, end + 1);
+        // Only patch if not already tagged
+        if (tag.indexOf(' tex=') === -1 && tag.indexOf(' alttext=') === -1) {
+            const closePos = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
+            const newTag = tag.slice(0, closePos) +
+                (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
+                (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
+                tag.slice(closePos);
+            return xml.slice(0, start) + newTag + xml.slice(end + 1);
+        }
+        p = end + 1;
+    }
+    return xml; // unchanged
+}
+
+function escapeXmlAttr(str) {
+    return str.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
 async function processXML(rawXML, filename) {
 
     // ── Fast pre-check: does this XML contain any equations? ─────
@@ -2058,17 +2148,20 @@ async function processXML(rawXML, filename) {
     txtLines.push("  End of Output");
     txtLines.push(SEP);
 
-    // ── Build modified XML (only if at least one img tag was found) ─
+    // ── Build modified XML ───────────────────────────────────────
+    // Fast approach: patch the original XML string directly instead of
+    // serializing the full DOM (serializeToString on 900KB DOM = 5-15s)
     let xmlContent = null;
     if (xmlModified) {
         try {
-            // Serialize DOM back to XML string
-            const serializer = new dom.window.XMLSerializer();
-            xmlContent = serializer.serializeToString(document);
-            console.log(`[OK] XML serialized — length: ${xmlContent.length} chars`);
+            xmlContent = patchXMLString(cleanXML, equations);
+            console.log(`[OK] XML patched — length: ${xmlContent.length} chars`);
         } catch(e) {
-            console.error(`[ERROR] XML serialization failed: ${e.message}`);
-            xmlContent = null;
+            console.error(`[ERROR] XML patch failed: ${e.message} — falling back to serializer`);
+            try {
+                const serializer = new dom.window.XMLSerializer();
+                xmlContent = serializer.serializeToString(document);
+            } catch(e2) { xmlContent = null; }
         }
     }
 
@@ -3114,40 +3207,34 @@ app.post("/process", upload.single("file"), async (req, res) => {
         console.log(`[INFO] Created outputs folder: ${OUTPUT}`);
     }
 
-    // Save TXT
+    // Save all 3 output files in PARALLEL (async) — not sequential sync
     const txtFilename = `${baseName}_${timestamp}_equations.txt`;
-    const txtPath     = path.resolve(path.join(OUTPUT, txtFilename));
-    try {
-        fs.writeFileSync(txtPath, result.txtContent, "utf8");
-        console.log(`[OK] TXT saved: ${txtPath}`);
-    } catch (e) {
-        console.error(`[ERROR] Cannot save TXT: ${e.message}`);
-        return res.status(500).json({ error: `Cannot save TXT file: ${e.message}` });
-    }
+    const logFilename = `${baseName}_${timestamp}_log.txt`;
+    let   xmlFilename = null;
 
-    // Save XML if modified
-    let xmlFilename = null;
+    const writePromises = [
+        fs.promises.writeFile(path.join(OUTPUT, txtFilename), result.txtContent, "utf8")
+            .then(() => console.log(`[OK] TXT saved`))
+            .catch(e => { throw new Error(`Cannot save TXT: ${e.message}`); }),
+        fs.promises.writeFile(path.join(OUTPUT, logFilename), result.logContent, "utf8")
+            .then(() => console.log(`[OK] LOG saved`))
+            .catch(e => console.error(`[WARN] Cannot save LOG: ${e.message}`))
+    ];
+
     if (result.xmlContent) {
         xmlFilename = `${baseName}_${timestamp}_modified.xml`;
-        const xmlPath = path.resolve(path.join(OUTPUT, xmlFilename));
-        try {
-            fs.writeFileSync(xmlPath, result.xmlContent, "utf8");
-            console.log(`[OK] XML saved: ${xmlPath}`);
-        } catch (e) {
-            console.error(`[ERROR] Cannot save XML: ${e.message}`);
-        }
-    } else {
-        console.log(`[INFO] No XML output — xmlModified=${result.xmlModified}`);
+        writePromises.push(
+            fs.promises.writeFile(path.join(OUTPUT, xmlFilename), result.xmlContent, "utf8")
+                .then(() => console.log(`[OK] XML saved`))
+                .catch(e => { xmlFilename = null; console.error(`[WARN] Cannot save XML: ${e.message}`); })
+        );
     }
 
-    // Save LOG file (always)
-    const logFilename = `${baseName}_${timestamp}_log.txt`;
-    const logPath     = path.resolve(path.join(OUTPUT, logFilename));
     try {
-        fs.writeFileSync(logPath, result.logContent, "utf8");
-        console.log(`[OK] LOG saved: ${logPath}`);
-    } catch (e) {
-        console.error(`[ERROR] Cannot save LOG: ${e.message}`);
+        await Promise.all(writePromises);
+        console.log(`[OK] All files written`);
+    } catch(e) {
+        return res.status(500).json({ error: e.message });
     }
 
     // Clear request timeout
