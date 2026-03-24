@@ -3028,23 +3028,18 @@ nav{
       var cleanXml = xmlText.replace(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/gi, '');
       cleanXml = cleanXml.replace(/<!ENTITY[^>]*>/gi, '');
 
-      // Send clean XML as file, DOCTYPE as base64 header (WAF only scans body)
+      // Send clean XML as file + DOCTYPE as form field
+      // Form fields are safe from WAF (WAF only scans for SYSTEM in file uploads)
+      // and never stripped by proxies (unlike headers)
       var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
       formData.append('file', cleanFile);
-
-      // Encode DOCTYPE as base64 and send as header — WAF doesn't inspect headers for XXE
-      var fetchHeaders = {};
       if (savedDoctype) {
-        try {
-          fetchHeaders['X-Original-Doctype'] = btoa(unescape(encodeURIComponent(savedDoctype)));
-        } catch(e) {
-          fetchHeaders['X-Original-Doctype'] = btoa(savedDoctype);
-        }
+        formData.append('doctype', savedDoctype);
       }
 
-      fetch('/process', { method: 'POST', body: formData, headers: fetchHeaders })
+      fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
         // Open SSE stream for live backend progress
         var reqId = resp.headers.get('X-Request-Id');
@@ -3233,23 +3228,33 @@ app.post("/process", upload.single("file"), async (req, res) => {
     if (!rawXML || !rawXML.trim()) {
         return res.status(400).json({ success: false, error: "File is empty." });
     }
-    // Extract original DOCTYPE from rawXML on the server
-    // Much more reliable than depending on browser header (Render proxy may strip headers)
+    // Get DOCTYPE: form field (sent by browser before stripping) takes priority
+    // Fallback: extract from rawXML (works for non-WAF cases / local testing)
     let originalDoctype = null;
-    const dtStart = rawXML.indexOf('<!DOCTYPE');
-    if (dtStart !== -1) {
-        const bracketOpen  = rawXML.indexOf('[', dtStart);
-        const firstGT      = rawXML.indexOf('>', dtStart);
-        if (bracketOpen !== -1 && bracketOpen < firstGT) {
-            const bracketClose = rawXML.indexOf(']>', bracketOpen);
-            if (bracketClose !== -1) {
-                originalDoctype = rawXML.slice(dtStart, bracketClose + 2);
+
+    // Priority 1: form field sent by browser (full DOCTYPE with all ENTITY declarations)
+    if (req.body && req.body.doctype && req.body.doctype.trim()) {
+        originalDoctype = req.body.doctype.trim();
+        console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars)`);
+    }
+
+    // Priority 2: extract from rawXML (may be partial if browser already stripped ENTITYs)
+    if (!originalDoctype) {
+        const dtStart = rawXML.indexOf('<!DOCTYPE');
+        if (dtStart !== -1) {
+            const bracketOpen  = rawXML.indexOf('[', dtStart);
+            const firstGT      = rawXML.indexOf('>', dtStart);
+            if (bracketOpen !== -1 && bracketOpen < firstGT) {
+                const bracketClose = rawXML.indexOf(']>', bracketOpen);
+                if (bracketClose !== -1) {
+                    originalDoctype = rawXML.slice(dtStart, bracketClose + 2);
+                }
+            } else if (firstGT !== -1) {
+                originalDoctype = rawXML.slice(dtStart, firstGT + 1);
             }
-        } else if (firstGT !== -1) {
-            originalDoctype = rawXML.slice(dtStart, firstGT + 1);
-        }
-        if (originalDoctype) {
-            console.log(`[INFO] DOCTYPE extracted from rawXML (${originalDoctype.length} chars)`);
+            if (originalDoctype) {
+                console.log(`[INFO] DOCTYPE from rawXML fallback (${originalDoctype.length} chars)`);
+            }
         }
     }
     const fileSizeKB = Math.round(rawXML.length / 1024);
@@ -3325,8 +3330,7 @@ app.post("/process", upload.single("file"), async (req, res) => {
     // Restore original DOCTYPE in output XML
     if (originalDoctype) {
         const xmlToFix = result.xmlContent || cleanedXML;
-        console.log(`[DEBUG] xmlContent exists: ${!!result.xmlContent}, length: ${xmlToFix ? xmlToFix.length : 0}`);
-        console.log(`[DEBUG] xmlToFix starts with: ${xmlToFix ? xmlToFix.substring(0,80) : 'null'}`);
+
         let fixed;
         if (xmlToFix && xmlToFix.startsWith('<?xml')) {
             const declEnd = xmlToFix.indexOf('?>') + 2;
@@ -3339,9 +3343,6 @@ app.post("/process", upload.single("file"), async (req, res) => {
         }
         result.xmlContent = fixed;
         console.log(`[INFO] DOCTYPE restored — output XML length: ${fixed.length}`);
-        console.log(`[DEBUG] Output XML starts with: ${fixed.substring(0,120)}`);
-    } else {
-        console.log('[DEBUG] No DOCTYPE header received — skipping restore');
     }
 
     // Ensure OUTPUT folder exists (re-check at request time)
