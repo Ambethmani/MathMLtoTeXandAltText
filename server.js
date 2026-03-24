@@ -824,18 +824,14 @@ function generateTeXFallback(mathmlStr, mathNode) {
 }
 
 /* ── MAIN generateTeX — async, tries WIRIS then falls back ── */
-// In-request TeX cache — skip WIRIS for duplicate equations in same file
-const _texCache = new Map();
-
-async function generateTeX(mathNode) {
+// Per-request TeX cache passed in from route — cleared after each request
+async function generateTeX(mathNode, _texCache) {
     const mathmlStr = prepareMathML(mathNode);
 
     // Check cache first — large files often have repeated equations
     const cacheKey = mathmlStr.replace(/\s+/g, "");
-    if (_texCache.has(cacheKey)) {
-        const cached = _texCache.get(cacheKey);
-        console.log("  [TEX] cache hit — skipping WIRIS");
-        return { ...cached, reason: cached.reason + " (cached)" };
+    if (_texCache && _texCache.has(cacheKey)) {
+        return { ..._texCache.get(cacheKey), reason: "cached" };
     }
 
     // ── WIRIS disabled — use mathml-to-latex directly ──────────
@@ -859,7 +855,7 @@ async function generateTeX(mathNode) {
             const t   = meaningfulTags[0].tagName.toLowerCase().replace(/^mml:/,"");
             const val = meaningfulTags[0].textContent.trim();
             if (["mi","mn","mo"].includes(t) && val && val.length <= 3) {
-                console.log(`  [TEX] fast-path: "${val}"`);
+                
                 const fastResult = { value: val, status: "OK", engine: "fast-path", reason: "single token", wirisAttempted: false };
                 _texCache.set(cacheKey, fastResult);
                 return fastResult;
@@ -888,8 +884,7 @@ async function generateTeX(mathNode) {
         }
 
         const cleanTex2 = postProcessTeX(tex);
-        if (CONFIG.LOG_ENGINE_USED)
-            console.log(`  [TEX] WIRIS OK — ${cleanTex2.substring(0, 60)}${cleanTex2.length > 60 ? "..." : ""}`);
+
 
         const result = {
             value:          cleanTex2,
@@ -900,7 +895,7 @@ async function generateTeX(mathNode) {
             wirisAttempted: true,
             wirisResult:    "success"
         };
-        _texCache.set(cacheKey, result);
+        if (_texCache) _texCache.set(cacheKey, result);
         return result;
 
     } catch (wirisErr) {
@@ -1568,6 +1563,7 @@ function escapeXmlAttr(str) {
 }
 
 async function processXML(rawXML, filename, reqId) {
+    const _texCache = new Map(); // per-request cache, auto-cleared when request ends
 
     // ── Fast pre-check: does this XML contain any equations? ─────
     // If no math/formula tags found anywhere, skip heavy DOM parsing
@@ -1615,8 +1611,7 @@ async function processXML(rawXML, filename, reqId) {
     }
 
     // Pre-process XML — use shared stripDOCTYPE function
-    let cleanXML = rawXML;
-    try { cleanXML = stripDOCTYPE(rawXML); } catch (_) {}
+    let cleanXML = rawXML; // route already stripped DOCTYPE
 
     // ── Elsevier size reduction ────────────────────────────────────
     // Elsevier XMLs are 200KB+ due to full bibliography (158+ refs)
@@ -1708,10 +1703,9 @@ async function processXML(rawXML, filename, reqId) {
         return xml.replace(fullTag, newTag);
     }
 
-    // Inject namespaces on jsdomXML (for JSDOM parsing)
-    jsdomXML = injectNamespaces(jsdomXML);
-    // Also inject on cleanXML (for output patching)
+    // Inject namespaces on both XML versions
     cleanXML = injectNamespaces(cleanXML);
+    jsdomXML  = jsdomXML === cleanXML ? cleanXML : injectNamespaces(jsdomXML);
 
     // ── Parse with fallback strategy ─────────────────────────────
     let dom, document;
@@ -1762,7 +1756,7 @@ async function processXML(rawXML, filename, reqId) {
         if (!math) return;
 
         const id     = eq.getAttribute("id") || eq.getAttribute("ID") || idFallback;
-        const texRes = await generateTeX(math);
+        const texRes = await generateTeX(math, _texCache);
         const altRes = generateAltText(math);
 
         const tex = texRes.value;
@@ -1803,7 +1797,6 @@ async function processXML(rawXML, filename, reqId) {
         if (imgEl) {
             // ── CASE 1: graphic/img tag found — write to it ───────
             cleanAndWrite(imgEl, tex, alt, texOK, altOK);
-            console.log(`  [${texRes.status === "OK" ? "OK" : "WARN"}] img tag updated — ${type} ID:${id} | engine: ${texRes.engine || "mathml-to-latex"}`);
 
         } else if (math.hasAttribute("altimg")) {
             // ── CASE 2: no graphic tag — write tex/alttext onto
@@ -1811,11 +1804,9 @@ async function processXML(rawXML, filename, reqId) {
             //    has an altimg attribute
             //    e.g. <mml:math altimg="si0001.svg" tex="" alttext="">
             cleanAndWrite(math, tex, alt, texOK, altOK);
-            console.log(`  [${texRes.status === "OK" ? "OK" : "WARN"}] math[@altimg] updated — ${type} ID:${id} | engine: ${texRes.engine || "mathml-to-latex"}`);
 
         } else {
             // ── CASE 3: no graphic, no altimg — TXT output only ──
-            console.log(`  [INFO] No img tag or altimg — TXT output only — ${type} ID:${id}`);
         }
 
         // Always run complexity analysis — store it for log reporting
@@ -1895,7 +1886,6 @@ async function processXML(rawXML, filename, reqId) {
             texVal    = texNode.firstChild.nodeValue.trim();
             texStatus = "OK";
             texReason = "EquationSource[Format=TEX]";
-            console.log(`  [TEX] Springer pre-extracted TeX — ${label}`);
         }
 
         // Priority 2: Springer structural MathML walker (exact Springer output format)
@@ -1905,14 +1895,12 @@ async function processXML(rawXML, filename, reqId) {
                 texVal    = walkerRes.value;
                 texStatus = "OK";
                 texReason = "springer-walker";
-                console.log(`  [TEX] Springer walker — ${label}`);
             }
         }
 
         // Priority 3: WIRIS as last resort only if walker produced nothing
         if (!texVal && math) {
-            console.log(`  [TEX] Walker empty for ${label} — falling back to WIRIS`);
-            const texRes = await generateTeX(math);
+            const texRes = await generateTeX(math, _texCache);
             texVal    = texRes.value;
             texStatus = texRes.status;
             texReason = texRes.reason + " (WIRIS fallback)";
@@ -1938,7 +1926,6 @@ async function processXML(rawXML, filename, reqId) {
             if (texVal && texStatus === "OK")           math.setAttribute("tex",     texVal);
             if (altRes.value && altRes.status === "OK") math.setAttribute("alttext", altRes.value);
             xmlModified = true;
-            console.log("  [INFO] Springer math[@altimg] updated — ID:" + label);
         }
         equations.push({
             type:       eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
@@ -1972,7 +1959,7 @@ async function processXML(rawXML, filename, reqId) {
                     [...eq.getElementsByTagName("math")][0] ||
                     [...eq.getElementsByTagName("mml:math")][0];
                 if (!math) return;
-                const texRes = await generateTeX(math);
+                const texRes = await generateTeX(math, _texCache);
                 const altRes = generateAltText(math);
                 const type = eq.tagName.toLowerCase().includes("inline") ? "Inline Equation" : "Display Equation";
                 const imgEl = eq.querySelector("imageobject") ||
@@ -2038,7 +2025,7 @@ async function processXML(rawXML, filename, reqId) {
             [...eq.getElementsByTagName("mml:math")][0];
         if (!math) return;
 
-        const texRes2 = await generateTeX(math);
+        const texRes2 = await generateTeX(math, _texCache);
         const altRes2 = generateAltText(math);
 
         // Find img tag — search all variants:
@@ -2076,15 +2063,12 @@ async function processXML(rawXML, filename, reqId) {
         if (imgEl) {
             // CASE 1: graphic/img tag found
             cleanWrite2(imgEl, texRes2.value, altRes2.value, texOK2, altOK2);
-            console.log(`  [${texRes2.status === "OK" ? "OK" : "WARN"}] img updated — HTML ID:${eqId}`);
 
         } else if (math && math.hasAttribute("altimg")) {
             // CASE 2: no graphic — write onto math[@altimg]
             cleanWrite2(math, texRes2.value, altRes2.value, texOK2, altOK2);
-            console.log(`  [${texRes2.status === "OK" ? "OK" : "WARN"}] math[@altimg] updated — HTML ID:${eqId}`);
 
         } else {
-            console.log(`  [INFO] No img/altimg found — TXT only — HTML ID:${eqId}`);
         }
 
         equations.push({
@@ -2115,13 +2099,12 @@ async function processXML(rawXML, filename, reqId) {
         ].filter((el, idx, arr) => arr.indexOf(el) === idx); // deduplicate
         // Detect Wiley by checking xmlns or wiley:location attribute
         const isWiley = allMathEls.length > 0 && allMathEls[0].hasAttribute("wiley:location");
-        if (isWiley) console.log(`  [INFO] Wiley format detected — bare math[@altimg]`);
 
         // Pre-allocate result slots to maintain order
         const bareResults = new Array(allMathEls.length);
         await processBatch(allMathEls.map(function(m,i){return{m:m,i:i};}), async function(item) {
             const i = item.i, math = item.m;
-            const texRes3 = await generateTeX(math);
+            const texRes3 = await generateTeX(math, _texCache);
             const altRes3 = generateAltText(math);
             const hasAltImg3 = math.hasAttribute("altimg");
             if (hasAltImg3 && texRes3.value && texRes3.status === "OK") {
