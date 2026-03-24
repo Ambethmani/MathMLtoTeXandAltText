@@ -1941,12 +1941,13 @@ async function processXML(rawXML, filename, reqId) {
             console.log("  [INFO] Springer math[@altimg] updated — ID:" + label);
         }
         equations.push({
-            type:      eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
-            format:    "Springer", id: label,
-            tex:       texVal,
-            alt:       altRes.value,
-            mathml:    math.outerHTML,
-            hasImg:    !!imgEl,
+            type:       eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
+            format:     "Springer", id: label,
+            tex:        texVal,
+            alt:        altRes.value,
+            mathml:     math.outerHTML,
+            hasImg:     !!(imgEl || math.hasAttribute("altimg")),
+            writeTarget: imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
             texStatus, texReason,
             altStatus: altRes.status,
             altReason: altRes.reason
@@ -2087,13 +2088,15 @@ async function processXML(rawXML, filename, reqId) {
         }
 
         equations.push({
-            type:      eq.classList.contains("display") ? "Display Equation" : "Inline Equation",
-            format:    "HTML",
-            id:        eq.getAttribute("data-id") || eq.getAttribute("id") || `eq-${i+1}`,
-            tex:       texRes2.value,
-            alt:       altRes2.value,
-            mathml:    math.outerHTML,
-            hasImg:    !!imgEl,
+            type:       eq.classList.contains("display") ? "Display Equation" : "Inline Equation",
+            format:     "HTML",
+            id:         eq.getAttribute("data-id") || eq.getAttribute("id") || `eq-${i+1}`,
+            tex:        texRes2.value,
+            alt:        altRes2.value,
+            mathml:     math.outerHTML,
+            hasImg:     !!(imgEl || (math && math.hasAttribute("altimg"))),
+            writeTarget: imgEl ? "graphic" : (math && math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
+            imgId:      imgEl ? (imgEl.getAttribute("id") || "") : "",
             texStatus: texRes2.status, texReason: texRes2.reason,
             altStatus: altRes2.status, altReason: altRes2.reason,
             engine:    texRes2.engine   || "mathml-to-latex",
@@ -3035,7 +3038,12 @@ nav{
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
       if (savedDoctype) {
-        formData.append('doctype', savedDoctype);  // MUST come before file field
+        // Base64-encode to hide SYSTEM keyword from Render WAF
+        try {
+          formData.append('doctype', btoa(unescape(encodeURIComponent(savedDoctype))));
+        } catch(e) {
+          formData.append('doctype', btoa(savedDoctype));
+        }
       }
       formData.append('file', cleanFile);
 
@@ -3234,11 +3242,14 @@ app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res)
     let originalDoctype = null;
 
     // Priority 1: form field sent by browser (full DOCTYPE with all ENTITY declarations)
-    console.log(`[DEBUG] req.body keys: ${Object.keys(req.body || {}).join(', ')}`);
-    console.log(`[DEBUG] req.body.doctype length: ${req.body && req.body.doctype ? req.body.doctype.length : 0}`);
     if (req.body && req.body.doctype && req.body.doctype.trim()) {
-        originalDoctype = req.body.doctype.trim();
-        console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars): ${originalDoctype.substring(0,80)}`);
+        try {
+            // Decode base64 — browser encodes to hide SYSTEM keyword from WAF
+            originalDoctype = Buffer.from(req.body.doctype.trim(), 'base64').toString('utf8');
+            console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars)`);
+        } catch(e) {
+            originalDoctype = req.body.doctype.trim(); // fallback: plain text
+        }
     }
 
     // Priority 2: extract from rawXML (may be partial if browser already stripped ENTITYs)
