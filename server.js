@@ -3034,10 +3034,10 @@ nav{
       var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
-      formData.append('file', cleanFile);
       if (savedDoctype) {
-        formData.append('doctype', savedDoctype);
+        formData.append('doctype', savedDoctype);  // MUST come before file field
       }
+      formData.append('file', cleanFile);
 
       fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
@@ -3204,7 +3204,7 @@ app.get("/progress/:reqId", (req, res) => {
 });
 
 // ── POST /process — main endpoint ───────────────────────────────
-app.post("/process", upload.single("file"), async (req, res) => {
+app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res) => {
   // ── Top-level safety net — always return JSON, never HTML ──────
   // Catches any error that slips past inner try-catch blocks
   // This is critical on cloud deployments where unhandled errors
@@ -3212,16 +3212,17 @@ app.post("/process", upload.single("file"), async (req, res) => {
   try {
 
     // ── Read uploaded file ───────────────────────────────────────
-    if (!req.file) {
+    const uploadedFile = req.files && req.files["file"] && req.files["file"][0];
+    if (!uploadedFile) {
         return res.status(400).json({ success: false, error: "No file uploaded." });
     }
-    const origName  = req.file.originalname;
+    const origName  = uploadedFile.originalname;
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
 
     let rawXML;
     try {
-        rawXML = fs.readFileSync(req.file.path, "utf8");
+        rawXML = fs.readFileSync(uploadedFile.path, "utf8");
     } catch (e) {
         return res.status(500).json({ success: false, error: "Cannot read file: " + e.message });
     }
@@ -3233,9 +3234,11 @@ app.post("/process", upload.single("file"), async (req, res) => {
     let originalDoctype = null;
 
     // Priority 1: form field sent by browser (full DOCTYPE with all ENTITY declarations)
+    console.log(`[DEBUG] req.body keys: ${Object.keys(req.body || {}).join(', ')}`);
+    console.log(`[DEBUG] req.body.doctype length: ${req.body && req.body.doctype ? req.body.doctype.length : 0}`);
     if (req.body && req.body.doctype && req.body.doctype.trim()) {
         originalDoctype = req.body.doctype.trim();
-        console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars)`);
+        console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars): ${originalDoctype.substring(0,80)}`);
     }
 
     // Priority 2: extract from rawXML (may be partial if browser already stripped ENTITYs)
@@ -3389,7 +3392,7 @@ app.post("/process", upload.single("file"), async (req, res) => {
     setTimeout(() => { progressEmitters.delete(reqId); }, 5000);
 
     // Clean up uploaded file from disk
-    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
+    try { if (uploadedFile && uploadedFile.path) fs.unlinkSync(uploadedFile.path); } catch (_) {}
 
     // Build response
     const baseURL  = `${req.protocol}://${req.get("host")}`;
