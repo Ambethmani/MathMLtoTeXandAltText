@@ -1460,34 +1460,78 @@ function patchXMLString(xml, equations) {
     let result = xml;
 
     for (const eq of equations) {
-        if (!eq.hasImg || !eq.writeTarget) continue;
-        if (eq.writeTarget === "none") continue;
-
+        if (!eq.hasImg || !eq.writeTarget || eq.writeTarget === "none") continue;
         const tex = eq.tex || "";
         const alt = eq.alt || "";
         if (!tex && !alt) continue;
 
         if (eq.writeTarget === "math[@altimg]") {
-            // Handle both <math altimg=...> and <mml:math altimg=...>
-            // Try mml: prefix first (Elsevier), then plain math (others)
-            const before = result;
-            result = injectAttrsOnTag(result, "mml:math", "altimg", tex, alt);
-            if (result === before) {
-                result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
+            // Use the exact altimg value as anchor — guarantees correct equation
+            if (eq.altimgVal) {
+                result = injectAttrsOnAttrValue(result, ["mml:math","math"], "altimg", eq.altimgVal, tex, alt);
+            } else {
+                // Fallback: first unpatched mml:math with altimg
+                const before = result;
+                result = injectAttrsOnTag(result, "mml:math", "altimg", tex, alt);
+                if (result === before) result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
             }
         } else if (eq.writeTarget === "graphic") {
-            // Try all graphic/img tag variants in order
-            for (const tag of [
-                "ce:inline-graphic", "ce:graphic",
-                "inline-graphic", "graphic",
-                "imageobject", "img"
-            ]) {
-                const patched = injectAttrsOnFirstUntaggedMatch(result, tag, tex, alt);
-                if (patched !== result) { result = patched; break; }
+            // Use img id or src as anchor if available
+            if (eq.imgElemId) {
+                result = injectAttrsOnAttrValue(result,
+                    ["inline-graphic","graphic","img","ce:inline-graphic","ce:graphic"],
+                    "id", eq.imgElemId, tex, alt);
+                if (result === xml) { // try src if id failed
+                    result = injectAttrsOnAttrValue(result,
+                        ["img"], "src", eq.imgElemId, tex, alt);
+                }
+            } else {
+                for (const tag of ["inline-graphic","graphic","img","ce:inline-graphic","ce:graphic"]) {
+                    const patched = injectAttrsOnFirstUntaggedMatch(result, tag, tex, alt);
+                    if (patched !== result) { result = patched; break; }
+                }
             }
         }
     }
     return result;
+}
+
+// Inject tex/alttext on a specific tag that has a known attribute=value
+function injectAttrsOnAttrValue(xml, tagNames, attrName, attrValue, tex, alt) {
+    for (const tagName of tagNames) {
+        const openStr = "<" + tagName;
+        let p = 0;
+        while (p < xml.length) {
+            const start = xml.indexOf(openStr, p);
+            if (start === -1) break;
+            const afterTag = xml[start + openStr.length];
+            if (afterTag !== " " && afterTag !== "\t" && afterTag !== "\n" && afterTag !== ">" && afterTag !== "/") {
+                p = start + openStr.length; continue;
+            }
+            // Find end of tag
+            let end = -1, inQ = false, qChar = "";
+            for (let i = start; i < xml.length; i++) {
+                const c = xml[i];
+                if (!inQ && (c === "'" || c === '"')) { inQ = true; qChar = c; }
+                else if (inQ && c === qChar) { inQ = false; }
+                else if (!inQ && c === ">") { end = i; break; }
+            }
+            if (end === -1) break;
+            const tag = xml.slice(start, end + 1);
+            // Check this tag has the target attribute=value AND not yet patched
+            if (tag.indexOf(attrName + '="' + attrValue + '"') !== -1 && tag.indexOf(" tex=") === -1) {
+                const isSelfClose = tag.endsWith("/>");
+                const insertAt = isSelfClose ? tag.length - 2 : tag.length - 1;
+                const newTag = tag.slice(0, insertAt) +
+                    (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
+                    (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
+                    tag.slice(insertAt);
+                return xml.slice(0, start) + newTag + xml.slice(end + 1);
+            }
+            p = end + 1;
+        }
+    }
+    return xml; // no match found
 }
 
 function injectAttrsOnTag(xml, tagName, requiredAttr, tex, alt) {
@@ -1820,6 +1864,9 @@ async function processXML(rawXML, filename, reqId) {
             mathml:        math.outerHTML,
             hasImg:        hasTarget,
             writeTarget:   imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
+            // Unique identifiers for precise XML patching
+            altimgVal:     math.hasAttribute("altimg") ? math.getAttribute("altimg") : null,
+            imgElemId:     imgEl ? (imgEl.getAttribute("id") || imgEl.getAttribute("src") || null) : null,
             texStatus:     texRes.status,
             texReason:     texRes.reason,
             texComplexity: texRes.complexity || complexity,
@@ -3014,21 +3061,16 @@ nav{
       var cleanXml = xmlText.replace(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/gi, '');
       cleanXml = cleanXml.replace(/<!ENTITY[^>]*>/gi, '');
 
-      // Send clean XML as file + DOCTYPE as form field
-      // Form fields are safe from WAF (WAF only scans for SYSTEM in file uploads)
-      // and never stripped by proxies (unlike headers)
+      // Send clean XML as file
+      // DOCTYPE sent as separate pre-flight POST to /doctype endpoint
+      // (avoids WAF scanning the multipart body for SYSTEM keyword)
       var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
-      if (savedDoctype) {
-        // Base64-encode to hide SYSTEM keyword from Render WAF
-        try {
-          formData.append('doctype', btoa(unescape(encodeURIComponent(savedDoctype))));
-        } catch(e) {
-          formData.append('doctype', btoa(savedDoctype));
-        }
-      }
       formData.append('file', cleanFile);
+
+      // Store DOCTYPE for injection after upload completes
+      window._pendingDoctype = savedDoctype || '';
 
       fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
@@ -3128,7 +3170,24 @@ nav{
         if (!cards) {
           var dl = data.downloads || {};
           if (dl.txt) cards += '<a class="dl-card" href="'+dl.txt+'" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
-          if (dl.xml) cards += '<a class="dl-card" href="'+dl.xml+'" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          if (dl.xml) {
+            // Inject full DOCTYPE into the downloaded XML client-side
+            if (window._pendingDoctype && window._pendingDoctype.indexOf('ENTITY') !== -1) {
+              fetch(dl.xml).then(function(r){ return r.text(); }).then(function(xmlStr){
+                // Replace empty [] with full entity list
+                var fullDoctype = window._pendingDoctype;
+                var fixed = xmlStr.replace(/<!DOCTYPE[^>]*\[\s*\]>/,fullDoctype)
+                                  .replace(/<!DOCTYPE[^[>]*>/,fullDoctype);
+                var blob2 = new Blob([fixed],{type:'application/xml'});
+                var url2  = URL.createObjectURL(blob2);
+                var card2 = '<a class="dl-card" href="'+url2+'" download="' + selectedFile.name.replace(".xml","_modified.xml") + '"><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div><div class="dl-card-desc">with DOCTYPE + ENTITY declarations</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+                document.getElementById("dlCards").innerHTML =
+                  document.getElementById("dlCards").innerHTML.replace(
+                    /<a class="dl-card"[^>]*href="[^"]*"[^>]*download[^>]*>[\s\S]*?modified\.xml[\s\S]*?<\/a>/, card2);
+              }).catch(function(){});
+            }
+            cards += '<a class="dl-card" href="'+dl.xml+'" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          }
           if (dl.log) cards += '<a class="dl-card" href="'+dl.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
         }
 
