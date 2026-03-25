@@ -3164,28 +3164,26 @@ nav{
         var ct = data.content || {};
         var cards = '';
         if (ct.txt) cards += dlCard(ct.txt, ct.txtName||'equations.txt', 'txt', '&#128196;', 'equations.txt', 'TeX + AltText + MathML for every equation');
-        if (ct.xml) cards += dlCard(ct.xml, ct.xmlName||'modified.xml',  'xml', '&#128196;', 'modified.xml',  'XML with tex="" alttext="" on img tags');
+        if (ct.xml) {
+          // Inject full DOCTYPE with ENTITY declarations before creating download
+          var xmlOut = ct.xml;
+          if (window._pendingDoctype && window._pendingDoctype.indexOf('ENTITY') !== -1) {
+            var emptyDt = xmlOut.indexOf('[]>');
+            if (emptyDt !== -1) {
+              var dtStart2 = xmlOut.lastIndexOf('<!DOCTYPE', emptyDt);
+              if (dtStart2 !== -1) {
+                xmlOut = xmlOut.slice(0, dtStart2) + window._pendingDoctype + xmlOut.slice(emptyDt + 3);
+              }
+            }
+          }
+          cards += dlCard(xmlOut, ct.xmlName||'modified.xml', 'xml', '&#128196;', 'modified.xml', 'XML with DOCTYPE + tex/alttext on equations');
+        }
         if (ct.log) cards += dlCard(ct.log, ct.logName||'log.txt',       'log', '&#128196;', 'log.txt',       'Processing log with complexity analysis');
 
         if (!cards) {
           var dl = data.downloads || {};
           if (dl.txt) cards += '<a class="dl-card" href="'+dl.txt+'" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
           if (dl.xml) {
-            // Inject full DOCTYPE into the downloaded XML client-side
-            if (window._pendingDoctype && window._pendingDoctype.indexOf('ENTITY') !== -1) {
-              fetch(dl.xml).then(function(r){ return r.text(); }).then(function(xmlStr){
-                // Replace empty [] with full entity list
-                var fullDoctype = window._pendingDoctype;
-                var fixed = xmlStr.replace(/<!DOCTYPE[^>]*\[\s*\]>/,fullDoctype)
-                                  .replace(/<!DOCTYPE[^[>]*>/,fullDoctype);
-                var blob2 = new Blob([fixed],{type:'application/xml'});
-                var url2  = URL.createObjectURL(blob2);
-                var card2 = '<a class="dl-card" href="'+url2+'" download="' + selectedFile.name.replace(".xml","_modified.xml") + '"><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div><div class="dl-card-desc">with DOCTYPE + ENTITY declarations</div></div><div class="dl-card-arrow">&#8595;</div></a>';
-                document.getElementById("dlCards").innerHTML =
-                  document.getElementById("dlCards").innerHTML.replace(
-                    /<a class="dl-card"[^>]*href="[^"]*"[^>]*download[^>]*>[\s\S]*?modified\.xml[\s\S]*?<\/a>/, card2);
-              }).catch(function(){});
-            }
             cards += '<a class="dl-card" href="'+dl.xml+'" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
           }
           if (dl.log) cards += '<a class="dl-card" href="'+dl.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
