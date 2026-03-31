@@ -428,12 +428,27 @@ function prepareMathML(mathNode) {
         !mathmlStr.trim().startsWith("<mml:math")) {
         mathmlStr = `<math>${mathmlStr}</math>`;
     }
+
+    // Step 1: Strip mml: tag name prefixes  (<mml:math> → <math>, </mml:mi> → </mi>)
     mathmlStr = mathmlStr
         .replace(/<mml:/g,  "<")
         .replace(/<\/mml:/g, "</");
 
+    // Step 2: After stripping tag prefixes, the opening <math> tag may still carry
+    //   xmlns:mml="http://www.w3.org/1998/Math/MathML"  ← namespace-prefixed decl
+    //   xmlns:xlink="..."                                ← xlink decl (irrelevant for TeX)
+    // These are WRONG for a plain <math> element and cause WIRIS to reject with
+    // "Error converting from MathML to LaTeX". Strip them, then add the correct xmlns.
+    mathmlStr = mathmlStr
+        .replace(/\s+xmlns:mml="[^"]*"/g,   "")   // remove xmlns:mml="..."
+        .replace(/\s+xmlns:xlink="[^"]*"/g, "")   // remove xmlns:xlink="..."
+        .replace(/\s+xmlns:xs="[^"]*"/g,    "")   // remove xmlns:xs="..."
+        .replace(/\s+xlink:\w+="[^"]*"/g,   "");  // remove xlink:href etc on child elements
+
+    // Step 3: Strip internal IDs (WIRIS can choke on them)
     mathmlStr = mathmlStr.replace(/\s+id="[^"]*"/g, "");
 
+    // Step 4: Normalize Unicode delimiters in mfenced open/close attributes
     mathmlStr = mathmlStr.replace(
         /\b(open|close|separators)="([^"]*)"/g,
         (match, attr, val) => {
@@ -447,15 +462,19 @@ function prepareMathML(mathNode) {
         }
     );
 
+    // Step 5: Normalize Unicode in mo element content
     mathmlStr = mathmlStr
         .replace(/<mo([^>]*)>∣<\/mo>/g,  "<mo$1>|</mo>")
         .replace(/<mo([^>]*)>⟨<\/mo>/g,  "<mo$1>&#x27E8;</mo>")
         .replace(/<mo([^>]*)>⟩<\/mo>/g,  "<mo$1>&#x27E9;</mo>");
 
-    if (!mathmlStr.includes("xmlns")) {
+    // Step 6: Ensure the math tag has the correct plain xmlns (required by WIRIS).
+    // After step 2, xmlns:mml is gone so includes("xmlns") now correctly reflects
+    // whether a plain xmlns= declaration is present.
+    if (!mathmlStr.includes('xmlns=')) {
         mathmlStr = mathmlStr.replace(
-            /^<math/,
-            '<math xmlns="http://www.w3.org/1998/Math/MathML"'
+            /^<math(\s|>)/,
+            '<math xmlns="http://www.w3.org/1998/Math/MathML"$1'
         );
     }
 
@@ -2597,7 +2616,30 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
     document.getElementById('results').style.display = 'none';
     document.getElementById('errorBox').style.display = 'none';
     startProgress();
-    sendFile();
+    // Ping /health first — on Render free tier the server may be cold-starting (30s+).
+    // wakeServer retries every 3s until the server responds, then sends the file.
+    wakeServer(0);
+  }
+
+  function wakeServer(attempts) {
+    if (attempts > 25) { // max 75s wait
+      sendFile(); // try anyway
+      return;
+    }
+    fetch('/health')
+      .then(function(r) {
+        if (r.ok) {
+          document.getElementById('progressLabel').textContent = 'Server ready — uploading...';
+          setTimeout(sendFile, 300);
+        } else {
+          document.getElementById('progressLabel').textContent = 'Waking server... (' + Math.round(attempts * 3) + 's)';
+          setTimeout(function() { wakeServer(attempts + 1); }, 3000);
+        }
+      })
+      .catch(function() {
+        document.getElementById('progressLabel').textContent = 'Waiting for server... (' + Math.round(attempts * 3) + 's)';
+        setTimeout(function() { wakeServer(attempts + 1); }, 3000);
+      });
   }
 
   function sc(num, label, cls) {
@@ -2658,7 +2700,20 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
         var data;
         try { data = JSON.parse(obj.text); } catch(e) {
           stopProgress(false);
-          showError('[HTTP ' + obj.status + '] ' + obj.text.replace(/<[^>]+>/g,'').substring(0,200));
+          // On Render free tier, cold-start may cause 502/503/504 even after wakeServer.
+          // Auto-retry once after a short delay.
+          if (obj.status === 502 || obj.status === 503 || obj.status === 504) {
+            var box = document.getElementById('errorBox');
+            box.textContent = '\u26a0 Server waking up (HTTP ' + obj.status + ') — retrying in 8s...';
+            box.style.display = 'block';
+            setTimeout(function() {
+              box.style.display = 'none';
+              document.getElementById('processBtn').disabled = false;
+              processFile();
+            }, 8000);
+          } else {
+            showError('[HTTP ' + obj.status + '] ' + obj.text.replace(/<[^>]+>/g,'').substring(0,200));
+          }
           return;
         }
 
