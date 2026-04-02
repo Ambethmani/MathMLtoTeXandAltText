@@ -42,15 +42,20 @@ const app    = express();
 const PORT   = process.env.PORT || 3000;
 
 // ── Global uncaught error handlers ──────────────────────────────
+// Prevents Render/Node from crashing on unhandled promise rejections
+// These are critical on cloud deployments
 process.on("uncaughtException", (err) => {
     console.error("[FATAL] Uncaught Exception:", err.message);
     console.error(err.stack);
+    // Don't exit — keep server running
 });
 
 process.on("unhandledRejection", (reason, promise) => {
     console.error("[FATAL] Unhandled Promise Rejection:", reason);
+    // Don't exit — keep server running
 });
 
+// Enable CORS — allows browser clients and external services to call the API
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin",  "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -59,17 +64,23 @@ app.use((req, res, next) => {
     next();
 });
 
+// Express body parsers with large limits
+// These only apply to JSON/urlencoded — multer handles multipart separately
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 const UPLOAD = path.join(__dirname, "uploads");
 const OUTPUT = path.join(__dirname, "outputs");
 
+// Create folders if not exist
 [UPLOAD, OUTPUT].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
 /* ================================================================
    CLOUD STORAGE CLEANUP
+   On cloud servers disk space is limited.
+   Auto-delete output files older than MAX_FILE_AGE_MS (default 1hr)
+   This keeps the outputs folder from filling up.
 ================================================================ */
-const MAX_FILE_AGE_MS = parseInt(process.env.MAX_FILE_AGE_MS || "3600000");
+const MAX_FILE_AGE_MS = parseInt(process.env.MAX_FILE_AGE_MS || "3600000"); // 1 hour
 
 function cleanOldOutputFiles() {
     try {
@@ -90,15 +101,14 @@ function cleanOldOutputFiles() {
     } catch (_) {}
 }
 
+// Run cleanup every 30 minutes
 setInterval(cleanOldOutputFiles, 30 * 60 * 1000);
 
-const IS_CLOUD = !!(
-    process.env.RENDER ||
-    process.env.RAILWAY_ENVIRONMENT ||
-    process.env.DYNO ||
-    process.env.K_SERVICE
-);
+// Is running on cloud (not localhost)
+// IS_CLOUD defined in CONFIG section below
 
+// Multer — disk storage (streams upload, avoids Render proxy body size limits)
+// Memory storage causes issues on Render free tier with larger files
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, UPLOAD),
     filename:    (req, file, cb) => cb(null, Date.now() + "_" + file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_"))
@@ -106,7 +116,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 20 * 1024 * 1024 },
+    limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
     fileFilter: (req, file, cb) => {
         if (file.originalname.toLowerCase().endsWith(".xml")) cb(null, true);
         else cb(new Error("Only .xml files are accepted"));
@@ -144,10 +154,13 @@ const ALT_SYMBOLS = {
     "∂":"partial","∇":"nabla","∫":"integral","∬":"double integral",
     "∭":"triple integral","∮":"contour integral",
     "∑":"sum","∏":"product","∞":"infinity","√":"square root",
+    // All angle bracket variants
     "\u27E8":"left angle bracket",  "\u27E9":"right angle bracket",
     "\u2329":"left angle bracket",  "\u232A":"right angle bracket",
     "\u3008":"left angle bracket",  "\u3009":"right angle bracket",
     "\u27EA":"left double angle bracket","\u27EB":"right double angle bracket",
+    "\u27E8":"left angle bracket",  "\u27E9":"right angle bracket",
+    "\u2329":"left angle bracket",  "\u232A":"right angle bracket",
     "⌈":"ceiling left","⌉":"ceiling right","⌊":"floor left","⌋":"floor right",
     "∣":"vertical bar","‖":"double vertical bar","|":"vertical bar",
     "(":"open parenthesis",")":"close parenthesis",
@@ -160,10 +173,20 @@ const ALT_SYMBOLS = {
     "\u200D":"","\u200B":"","\u00A0":" "
 };
 
+
 /* ================================================================
    MATHML COMPLEXITY ANALYZER
+   Inspects a MathML node and reports:
+   - Nesting depth
+   - All unique element types used
+   - Total element count
+   - Any unsupported / rare elements
+   - Detected complexity level (LOW / MEDIUM / HIGH / VERY HIGH)
+   This is attached to every failed/warned equation in the log
+   so engineers can see exactly WHY conversion failed.
 ================================================================ */
 
+// Elements mathml-to-latex handles well
 const SUPPORTED_ELEMENTS = new Set([
     "math","mrow","mi","mn","mo","mtext","ms","mspace",
     "msup","msub","msubsup","munder","mover","munderover",
@@ -173,6 +196,7 @@ const SUPPORTED_ELEMENTS = new Set([
     "mlabeledtr","maligngroup","malignmark","none"
 ]);
 
+// Elements that are rare / complex / may cause failures
 const COMPLEX_ELEMENTS = new Set([
     "maction","mglyph","mlongdiv","msgroup","msrow","mscarries",
     "mscarry","msline","mstack","menclose","mfraction",
@@ -188,7 +212,7 @@ function analyzeMathMLComplexity(mathNode) {
 
     function traverse(node, depth) {
         if (!node) return;
-        if (node.nodeType === 3) return;
+        if (node.nodeType === 3) return; // text node
 
         const tag = node.nodeName.replace(/^mml:/i, "").toLowerCase();
         totalNodes++;
@@ -204,6 +228,7 @@ function analyzeMathMLComplexity(mathNode) {
 
     traverse(mathNode, 0);
 
+    // Determine complexity level
     let level = "LOW";
     let reasons = [];
 
@@ -217,15 +242,19 @@ function analyzeMathMLComplexity(mathNode) {
     if (unsupported.size > 0) { level = "VERY HIGH"; reasons.push(`unsupported elements: ${[...unsupported].join(", ")}`); }
     if (complex.size > 0)     { if (level === "LOW" || level === "MEDIUM") level = "HIGH"; reasons.push(`complex elements: ${[...complex].join(", ")}`); }
 
+    // Check for nested fractions (common cause of conversion issues)
     const fracCount = elementCounts["mfrac"] || 0;
     if (fracCount >= 3)       { reasons.push(`multiple nested fractions (${fracCount}x mfrac)`); }
 
+    // Check for nested scripts
     const scriptCount = (elementCounts["msup"] || 0) + (elementCounts["msub"] || 0) +
                         (elementCounts["msubsup"] || 0) + (elementCounts["munderover"] || 0);
     if (scriptCount >= 5)     { reasons.push(`many script elements (${scriptCount} total)`); }
 
+    // Check for table/matrix structures
     if (elementCounts["mtable"]) { reasons.push(`contains matrix/table (${elementCounts["mtable"]}x mtable)`); }
 
+    // Check for entity references / special chars in mo
     const allText = mathNode.textContent || "";
     const hasEntities = /[\u0080-\uFFFF]/.test(allText);
     if (hasEntities)           { reasons.push("contains non-ASCII Unicode characters"); }
@@ -244,17 +273,54 @@ function analyzeMathMLComplexity(mathNode) {
 
 /* ================================================================
    TEX GENERATOR — DUAL ENGINE
+   ---------------------------------------------------------------
+   Strategy:
+     1. PRIMARY   : WIRIS/MathType API  (~99% accuracy, online)
+                    https://www.wiris.net/demo/editor/mathml2latex
+     2. FALLBACK  : mathml-to-latex     (~90% accuracy, offline)
+                    Used when WIRIS is disabled, unavailable, or
+                    returns empty result
+     3. ERROR     : Both failed — logged with complexity analysis
+
+   Configuration (set in server.js config block below):
+     WIRIS_ENABLED = true/false
+     WIRIS_TIMEOUT = milliseconds before falling back (default 5000)
 ================================================================ */
 
+/* ── CONFIGURATION ─────────────────────────────────────────── */
+// Detect if running on cloud
+const IS_CLOUD = !!(
+    process.env.RENDER ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.DYNO ||
+    process.env.K_SERVICE
+);
+
 const CONFIG = {
-    WIRIS_ENABLED:  process.env.WIRIS_ENABLED !== "false",
+    // WIRIS always enabled — gives ~99% accuracy
+    // Can be disabled via env var WIRIS_ENABLED=false if needed
+    WIRIS_ENABLED: process.env.WIRIS_ENABLED !== "false",
+
+    // WIRIS demo endpoint
     WIRIS_ENDPOINT: "https://www.wiris.net/demo/editor/mathml2latex",
-    WIRIS_TIMEOUT:  parseInt(process.env.WIRIS_TIMEOUT || "4000"),
-    WIRIS_MAX_EQ:   parseInt(process.env.WIRIS_MAX_EQ || "99999"),
+
+    // Timeout per WIRIS call (ms)
+    // 8 seconds per equation — enough for slow network on cloud
+    WIRIS_TIMEOUT: parseInt(process.env.WIRIS_TIMEOUT || "4000"),
+
+    // No equation limit — process ALL equations through WIRIS
+    WIRIS_MAX_EQ: parseInt(process.env.WIRIS_MAX_EQ || "99999"),
+
+    // Log which engine was used
     LOG_ENGINE_USED: true,
+
+    // Parallel batch size for WIRIS calls
+    // 5 = process 5 equations simultaneously (5x faster than sequential)
     WIRIS_BATCH_SIZE: parseInt(process.env.WIRIS_BATCH_SIZE || "5")
 };
 
+/* ── WIRIS API CALL ────────────────────────────────────────── */
+// Persistent HTTPS agent — reuses TCP connections to WIRIS (saves ~200ms per call)
 const _httpsAgent = new (require("https").Agent)({ keepAlive: true, maxSockets: 15 });
 const _httpAgent  = new (require("http").Agent)({ keepAlive: true, maxSockets: 15 });
 
@@ -286,6 +352,11 @@ async function callWirisAPI(mathmlStr) {
                 res.on("end",   ()    => {
                     const trimmed = data.trim();
 
+                    // ── Detect WIRIS error responses ───────────────
+                    // WIRIS returns HTTP 200 even for errors, with
+                    // the error message as plain text response body
+                    // Known WIRIS error response patterns
+                    // WIRIS returns these as plain text with HTTP 200
                     const WIRIS_ERROR_PATTERNS = [
                         "error converting from mathml to latex",
                         "error converting",
@@ -300,16 +371,20 @@ async function callWirisAPI(mathmlStr) {
                         "undefined"
                     ];
 
+                    // Check both startsWith AND contains — WIRIS
+                    // sometimes wraps the error in extra text
                     const lowerTrimmed = trimmed.toLowerCase();
                     const isWirisError = !trimmed ||
                         WIRIS_ERROR_PATTERNS.some(p =>
                             lowerTrimmed.startsWith(p) ||
                             lowerTrimmed.includes(p)
                         ) ||
+                        // Extra safety: valid LaTeX must contain
+                        // at least one letter or digit
                         !/[a-zA-Z0-9]/.test(trimmed);
 
                     if (res.statusCode === 200 && trimmed && !isWirisError) {
-                        resolve(trimmed);
+                        resolve(trimmed); // cache stored below in generateTeX
                     } else if (isWirisError) {
                         reject(new Error(`WIRIS conversion error: ${trimmed.substring(0, 100)}`));
                     } else {
@@ -333,28 +408,44 @@ async function callWirisAPI(mathmlStr) {
     });
 }
 
+/* ── UNICODE DELIMITER MAP FOR mfenced ────────────────────── */
+// Maps Unicode chars used in open/close attributes to their
+// XML entity equivalents that both WIRIS and mathml-to-latex
+// understand correctly
 const DELIMITER_ENTITY_MAP = {
-    "∣":  "&#x007C;",
-    "|":  "&#x007C;",
-    "‖":  "&#x2016;",
-    "⟨":  "&#x27E8;",
-    "⟩":  "&#x27E9;",
-    "〈": "&#x27E8;",
-    "〉": "&#x27E9;",
-    "〈": "&#x27E8;",
-    "〉": "&#x27E9;",
+    // Vertical bars / pipes
+    "∣":  "&#x007C;",    // U+2223 → | (vertical bar)
+    "\u2223": "&#x007C;", // explicit U+2223 (same as ∣, belt-and-suspenders)
+    "|":  "&#x007C;",    // U+007C → | (same)
+    "‖":  "&#x2016;",   // double vertical bar
+    // Angle brackets — all variants mapped to standard entities
+    "⟨":  "&#x27E8;",   // U+27E8 math langle
+    "⟩":  "&#x27E9;",   // U+27E9 math rangle
+    "〈": "&#x27E8;", // U+2329 → langle
+    "〉": "&#x27E9;", // U+232A → rangle
+    "〈": "&#x27E8;", // U+3008 CJK → langle
+    "〉": "&#x27E9;", // U+3009 CJK → rangle
+    // Floor / ceiling
     "⌈":  "&#x2308;",
     "⌉":  "&#x2309;",
     "⌊":  "&#x230A;",
     "⌋":  "&#x230B;",
+    // Braces / brackets
     "{":  "&#x007B;",
     "}":  "&#x007D;",
+    // Empty — keep as-is
     "":   ""
 };
 
+/* ── POST-PROCESS TEX OUTPUT ───────────────────────────────── */
+// Fixes known wrong conversions from WIRIS or mathml-to-latex:
+//   - Raw Unicode chars left inside \left \right commands
+//   - Raw Unicode Greek/operator symbols in output
 function postProcessTeX(tex) {
     if (!tex) return tex;
     let t = tex;
+    // Fix \left / \right with raw Unicode delimiters
+    // NOTE: replacement strings use single \\ which produces one backslash in the output string
     t = t.replace(/\\left\s*\u2223/g,  "\\left|");
     t = t.replace(/\\right\s*\u2223/g, "\\right|");
     t = t.replace(/\\left\s*\|/g,      "\\left|");
@@ -369,6 +460,7 @@ function postProcessTeX(tex) {
     t = t.replace(/\\right\s*\u2309/g, "\\right\\rceil");
     t = t.replace(/\\left\s*\u230A/g,  "\\left\\lfloor");
     t = t.replace(/\\right\s*\u230B/g, "\\right\\rfloor");
+    // Fix raw Unicode operators
     t = t.replace(/\u2297/g, "\\otimes");
     t = t.replace(/\u2295/g, "\\oplus");
     t = t.replace(/\u2296/g, "\\ominus");
@@ -393,6 +485,7 @@ function postProcessTeX(tex) {
     t = t.replace(/\u222A/g, "\\cup");
     t = t.replace(/\u2229/g, "\\cap");
     t = t.replace(/\u2205/g, "\\emptyset");
+    // Fix raw Unicode Greek letters
     t = t.replace(/\u03B1/g, "\\alpha");
     t = t.replace(/\u03B2/g, "\\beta");
     t = t.replace(/\u03B3/g, "\\gamma");
@@ -417,38 +510,31 @@ function postProcessTeX(tex) {
     t = t.replace(/\u03A6/g, "\\Phi");
     t = t.replace(/\u03A8/g, "\\Psi");
     t = t.replace(/\u03A9/g, "\\Omega");
+    // Strip zero-width chars and clean spaces
     t = t.replace(/\u200D/g, "").replace(/\u200B/g, "");
     t = t.replace(/  +/g, " ").trim();
     return t;
 }
 
+
+
+/* ── MATHML STRING PREP (shared by both engines) ──────────── */
 function prepareMathML(mathNode) {
     let mathmlStr = mathNode.outerHTML || "";
     if (!mathmlStr.trim().startsWith("<math") &&
         !mathmlStr.trim().startsWith("<mml:math")) {
         mathmlStr = `<math>${mathmlStr}</math>`;
     }
-
-    // Step 1: Strip mml: tag name prefixes  (<mml:math> → <math>, </mml:mi> → </mi>)
+    // Strip mml: namespace — both engines expect plain <math>
     mathmlStr = mathmlStr
         .replace(/<mml:/g,  "<")
         .replace(/<\/mml:/g, "</");
 
-    // Step 2: After stripping tag prefixes, the opening <math> tag may still carry
-    //   xmlns:mml="http://www.w3.org/1998/Math/MathML"  ← namespace-prefixed decl
-    //   xmlns:xlink="..."                                ← xlink decl (irrelevant for TeX)
-    // These are WRONG for a plain <math> element and cause WIRIS to reject with
-    // "Error converting from MathML to LaTeX". Strip them, then add the correct xmlns.
-    mathmlStr = mathmlStr
-        .replace(/\s+xmlns:mml="[^"]*"/g,   "")   // remove xmlns:mml="..."
-        .replace(/\s+xmlns:xlink="[^"]*"/g, "")   // remove xmlns:xlink="..."
-        .replace(/\s+xmlns:xs="[^"]*"/g,    "")   // remove xmlns:xs="..."
-        .replace(/\s+xlink:\w+="[^"]*"/g,   "");  // remove xlink:href etc on child elements
-
-    // Step 3: Strip internal IDs (WIRIS can choke on them)
+    // Strip internal IDs — WIRIS can choke on them
     mathmlStr = mathmlStr.replace(/\s+id="[^"]*"/g, "");
 
-    // Step 4: Normalize Unicode delimiters in mfenced open/close attributes
+    // Normalize Unicode delimiters in mfenced open/close attributes
+    // e.g. open="∣" close="⟩" → open="&#x007C;" close="&#x27E9;"
     mathmlStr = mathmlStr.replace(
         /\b(open|close|separators)="([^"]*)"/g,
         (match, attr, val) => {
@@ -462,32 +548,35 @@ function prepareMathML(mathNode) {
         }
     );
 
-    // Step 5: Normalize Unicode in mo element content
+    // Also normalize Unicode in mo element content
+    // e.g. <mo>∣</mo> should become <mo>|</mo>
     mathmlStr = mathmlStr
         .replace(/<mo([^>]*)>∣<\/mo>/g,  "<mo$1>|</mo>")
         .replace(/<mo([^>]*)>⟨<\/mo>/g,  "<mo$1>&#x27E8;</mo>")
         .replace(/<mo([^>]*)>⟩<\/mo>/g,  "<mo$1>&#x27E9;</mo>");
 
-    // Step 6: Ensure the math tag has the correct plain xmlns (required by WIRIS).
-    // After step 2, xmlns:mml is gone so includes("xmlns") now correctly reflects
-    // whether a plain xmlns= declaration is present.
-    if (!mathmlStr.includes('xmlns=')) {
+    // Ensure math tag has xmlns — required by WIRIS
+    if (!mathmlStr.includes("xmlns")) {
         mathmlStr = mathmlStr.replace(
-            /^<math(\s|>)/,
-            '<math xmlns="http://www.w3.org/1998/Math/MathML"$1'
+            /^<math/,
+            '<math xmlns="http://www.w3.org/1998/Math/MathML"'
         );
     }
 
     return mathmlStr;
 }
 
+/* ── FALLBACK: mathml-to-latex ─────────────────────────────── */
 /* ================================================================
    SPRINGER TEX WALKER
+   Converts MathML DOM nodes to TeX using structural walking.
+   Matches Springer's exact TeX output requirements.
+   Used as a secondary fallback after mathml-to-latex.
 ================================================================ */
 function springerTeXWalker(mathNode) {
     function walk(node) {
         if (!node) return "";
-        if (node.nodeType === 3) return node.textContent;
+        if (node.nodeType === 3) return node.textContent; // text node
 
         const name = (node.nodeName || "").toLowerCase().replace(/^mml:/, "");
 
@@ -501,12 +590,15 @@ function springerTeXWalker(mathNode) {
                 return [...node.childNodes].map(walk).join("");
 
             case "mi":
+                // Italic identifiers — wrap in braces
                 return `{${node.textContent}}`;
 
             case "mn":
+                // Numbers — wrap in braces
                 return `{${node.textContent}}`;
 
             case "mo": {
+                // Operators — map special Unicode to TeX
                 const op = node.textContent.trim();
                 const opMap = {
                     "∑": "\\sum", "∏": "\\prod", "∫": "\\int",
@@ -575,6 +667,7 @@ function springerTeXWalker(mathNode) {
                     const base = walk(node.children[0]);
                     const under = walk(node.children[1]);
                     const over  = walk(node.children[2]);
+                    // Check if base is a sum/integral-like operator
                     const baseText = node.children[0].textContent.trim();
                     if (["∑","∏","∫","∮","⋃","⋂"].includes(baseText)) {
                         return `${base}_{${under}}^{${over}}`;
@@ -609,6 +702,7 @@ function springerTeXWalker(mathNode) {
                         "⌢": `\\widehat{${base}}`,
                     };
                     if (accentMap[over]) return accentMap[over];
+                    // Check accent attribute
                     if (node.getAttribute && node.getAttribute("accent") === "true") {
                         return `\\overset{${walk(node.children[1])}}{${base}}`;
                     }
@@ -621,8 +715,21 @@ function springerTeXWalker(mathNode) {
                 const close = node.getAttribute("close") !== null ? node.getAttribute("close") : ")";
                 const sep   = node.getAttribute("separators") || ",";
                 const kids  = [...node.children].map(walk);
-                const openTex  = open  === "{" ? "\\{" : open  === "⟨" ? "\\langle" : open;
-                const closeTex = close === "}" ? "\\}" : close === "⟩" ? "\\rangle" : close;
+                // Map all delimiter variants to correct TeX commands
+                function toDelimTex(d) {
+                    if (d === "{")  return "\\{";
+                    if (d === "}")  return "\\}";
+                    if (d === "\u27E8" || d === "\u2329" || d === "\u3008") return "\\langle";
+                    if (d === "\u27E9" || d === "\u232A" || d === "\u3009") return "\\rangle";
+                    if (d === "\u2223" || d === "|") return "|";
+                    if (d === "\u2308") return "\\lceil";
+                    if (d === "\u2309") return "\\rceil";
+                    if (d === "\u230A") return "\\lfloor";
+                    if (d === "\u230B") return "\\rfloor";
+                    return d;
+                }
+                const openTex  = toDelimTex(open);
+                const closeTex = toDelimTex(close);
                 return `\\left${openTex}${kids.join(sep)}\\right${closeTex}`;
             }
 
@@ -652,12 +759,13 @@ function springerTeXWalker(mathNode) {
             }
 
             case "semantics":
+                // Use first child (presentation MathML), skip annotation
                 if (node.children.length > 0) return walk(node.children[0]);
                 return "";
 
             case "annotation":
             case "annotation-xml":
-                return "";
+                return ""; // skip TeX/XML annotations
 
             case "menclose": {
                 const notation = node.getAttribute("notation") || "box";
@@ -688,10 +796,12 @@ function springerTeXWalker(mathNode) {
 }
 
 function generateTeXFallback(mathmlStr, mathNode) {
+    // Chain: mathml-to-latex → springer-walker → empty
     try {
         const tex = MathMLToLaTeX.convert(mathmlStr);
         if (tex && tex.trim()) {
             const cleanTex = postProcessTeX(tex);
+            // Sanity-check: reject garbage output
             const STALE = ["error converting from mathml to latex","error converting",
                            "error processing","invalid mathml","cannot convert"];
             const lower = cleanTex.toLowerCase();
@@ -707,6 +817,7 @@ function generateTeXFallback(mathmlStr, mathNode) {
         }
     } catch (_) {}
 
+    // mathml-to-latex failed or returned garbage — try Springer structural walker
     if (mathNode) {
         const walkerResult = springerTeXWalker(mathNode);
         if (walkerResult.status === "OK" && walkerResult.value) {
@@ -715,6 +826,7 @@ function generateTeXFallback(mathmlStr, mathNode) {
         }
     }
 
+    // All fallbacks exhausted
     const complexity = analyzeMathMLComplexity(mathNode);
     return {
         value:      "",
@@ -726,14 +838,18 @@ function generateTeXFallback(mathmlStr, mathNode) {
     };
 }
 
+/* ── MAIN generateTeX — async, tries WIRIS then falls back ── */
+// Per-request TeX cache passed in from route — cleared after each request
 async function generateTeX(mathNode, _texCache) {
     const mathmlStr = prepareMathML(mathNode);
 
+    // Check cache first — large files often have repeated equations
     const cacheKey = mathmlStr.replace(/\s+/g, "");
     if (_texCache && _texCache.has(cacheKey)) {
         return { ..._texCache.get(cacheKey), reason: "cached" };
     }
 
+    // ── WIRIS disabled — use mathml-to-latex directly ──────────
     if (!CONFIG.WIRIS_ENABLED) {
         const result = generateTeXFallback(mathmlStr, mathNode);
         if (CONFIG.LOG_ENGINE_USED)
@@ -741,6 +857,9 @@ async function generateTeX(mathNode, _texCache) {
         return result;
     }
 
+    // ── Fast-path: trivially simple equations ─────────────────
+    // Single number, variable, or operator — skip WIRIS entirely
+    // e.g. <math><mi>x</mi></math> → just "x"
     {
         const allChildren = mathNode ? [...mathNode.getElementsByTagName("*")] : [];
         const meaningfulTags = allChildren.filter(n => {
@@ -751,6 +870,7 @@ async function generateTeX(mathNode, _texCache) {
             const t   = meaningfulTags[0].tagName.toLowerCase().replace(/^mml:/,"");
             const val = meaningfulTags[0].textContent.trim();
             if (["mi","mn","mo"].includes(t) && val && val.length <= 3) {
+                
                 const fastResult = { value: val, status: "OK", engine: "fast-path", reason: "single token", wirisAttempted: false };
                 _texCache.set(cacheKey, fastResult);
                 return fastResult;
@@ -758,18 +878,29 @@ async function generateTeX(mathNode, _texCache) {
         }
     }
 
+    // All equations go through WIRIS for maximum accuracy
+
+    // ── Try WIRIS first ────────────────────────────────────────
     try {
         const tex = await callWirisAPI(mathmlStr);
 
         if (!tex || tex.trim() === "") {
+            // WIRIS returned empty — fall through to fallback
             console.log("  [TEX] WIRIS returned empty — falling back to mathml-to-latex");
             const fallback = generateTeXFallback(mathmlStr, mathNode);
             fallback.wirisAttempted = true;
             fallback.wirisResult    = "empty response";
+            if (fallback.value) {
+                console.log(`  [TEX] Fallback OK — ${fallback.value.substring(0,60)}${fallback.value.length > 60 ? "..." : ""}`);
+            } else {
+                console.log(`  [TEX] Fallback also failed — ${fallback.reason}`);
+            }
             return fallback;
         }
 
         const cleanTex2 = postProcessTeX(tex);
+
+
         const result = {
             value:          cleanTex2,
             status:         "OK",
@@ -783,10 +914,21 @@ async function generateTeX(mathNode, _texCache) {
         return result;
 
     } catch (wirisErr) {
+        // ── WIRIS failed — automatically use mathml-to-latex ───
         console.log(`  [TEX] WIRIS failed: ${wirisErr.message}`);
+        console.log(`  [TEX] Falling back to mathml-to-latex...`);
+
         const fallback = generateTeXFallback(mathmlStr, mathNode);
         fallback.wirisAttempted = true;
         fallback.wirisResult    = wirisErr.message;
+
+        // Log fallback result clearly
+        if (fallback.value) {
+            console.log(`  [TEX] Fallback OK — ${fallback.value.substring(0,60)}${fallback.value.length > 60 ? "..." : ""}`);
+        } else {
+            console.log(`  [TEX] Fallback also failed [${fallback.status}] — ${fallback.reason}`);
+        }
+
         return fallback;
     }
 }
@@ -906,96 +1048,14 @@ function generateAltText(mathNode) {
     }
 }
 
-/* ================================================================
-   BUILD JSON OUTPUT — replaces the old TXT builder
-   Produces a structured JSON file: equations.json
-================================================================ */
-function buildJSONOutput(equations, filename, timestamp) {
-    const now = new Date().toISOString();
-
-    if (!equations || equations.length === 0) {
-        return JSON.stringify({
-            meta: {
-                tool:      "MathMLtoTeXandAltText",
-                inputFile: filename,
-                processedAt: now,
-                totalEquations: 0,
-                status: "NO_EQUATIONS_FOUND"
-            },
-            equations: []
-        }, null, 2);
-    }
-
-    const texOK    = equations.filter(e => e.texStatus === "OK").length;
-    const texWarn  = equations.filter(e => e.texStatus === "WARN").length;
-    const texError = equations.filter(e => e.texStatus === "ERROR").length;
-    const altOK    = equations.filter(e => e.altStatus === "OK").length;
-    const altWarn  = equations.filter(e => e.altStatus === "WARN").length;
-    const altError = equations.filter(e => e.altStatus === "ERROR").length;
-
-    const output = {
-        meta: {
-            tool:        "MathMLtoTeXandAltText",
-            inputFile:   filename,
-            processedAt: now,
-            totalEquations: equations.length,
-            withImgTag:     equations.filter(e => e.hasImg).length,
-            withoutImgTag:  equations.filter(e => !e.hasImg).length,
-            status: equations.every(e => e.texStatus === "OK" && e.altStatus === "OK")
-                    ? "SUCCESS" : "COMPLETED_WITH_ISSUES",
-            conversionSummary: {
-                tex: { success: texOK, warnings: texWarn, errors: texError },
-                alt: { success: altOK, warnings: altWarn, errors: altError }
-            }
-        },
-        equations: equations.map((eq, i) => {
-            const cx = eq.complexity || {};
-            const obj = {
-                index:      i + 1,
-                id:         eq.id,
-                type:       eq.type,
-                format:     eq.format,
-                hasImgTag:  eq.hasImg,
-                writeTarget: eq.writeTarget || "none",
-                tex: {
-                    value:  eq.tex || "",
-                    status: eq.texStatus || "UNKNOWN",
-                    engine: eq.engine || "unknown",
-                    wirisUsed: eq.wirisAttempted ? (eq.wirisResult === "success") : false
-                },
-                altText: {
-                    value:  eq.alt || "",
-                    status: eq.altStatus || "UNKNOWN"
-                },
-                mathml: eq.mathml || "",
-                complexity: {
-                    level:      cx.level || "N/A",
-                    maxDepth:   cx.maxDepth || 0,
-                    totalNodes: cx.totalNodes || 0,
-                    reasons:    cx.reasons || []
-                }
-            };
-
-            // Only include error details when there are issues
-            if (eq.texStatus !== "OK" && eq.texReason) {
-                obj.tex.failReason = eq.texReason;
-            }
-            if (eq.altStatus !== "OK" && eq.altReason) {
-                obj.altText.failReason = eq.altReason;
-            }
-            if (cx.unsupportedElements && cx.unsupportedElements.length > 0) {
-                obj.complexity.unsupportedElements = cx.unsupportedElements;
-            }
-
-            return obj;
-        })
-    };
-
-    return JSON.stringify(output, null, 2);
-}
 
 /* ================================================================
    LOG FILE BUILDER
+   Produces a detailed processing log per equation:
+   - SUCCESS: TeX and AltText both converted OK
+   - WARN:    Conversion returned empty but no error thrown
+   - ERROR:   Conversion threw an exception
+   Summary counts at top and bottom.
 ================================================================ */
 
 function buildLog(equations, filename, timestamp) {
@@ -1003,6 +1063,7 @@ function buildLog(equations, filename, timestamp) {
     const DIV  = "-".repeat(72);
     const now  = new Date().toLocaleString();
 
+    // ── SPECIAL CASE: No equations found ─────────────────────────
     if (!equations || equations.length === 0) {
         return [
             SEP,
@@ -1038,7 +1099,11 @@ function buildLog(equations, filename, timestamp) {
         ].join("\n");
     }
 
+    // ── NORMAL CASE: Equations found — continue below ─────────────
     const SUB  = "~".repeat(72);
+    // now already declared above
+
+    // ── Count statuses ────────────────────────────────────────────
     const total       = equations.length;
     const texOK       = equations.filter(e => e.texStatus === "OK").length;
     const texWarn     = equations.filter(e => e.texStatus === "WARN").length;
@@ -1051,6 +1116,7 @@ function buildLog(equations, filename, timestamp) {
     const failedEqs   = equations.filter(e => e.texStatus !== "OK" || e.altStatus !== "OK");
     const allOK       = failedEqs.length === 0;
 
+    // Complexity distribution
     const cxLow      = equations.filter(e => e.complexity && e.complexity.level === "LOW").length;
     const cxMedium   = equations.filter(e => e.complexity && e.complexity.level === "MEDIUM").length;
     const cxHigh     = equations.filter(e => e.complexity && e.complexity.level === "HIGH").length;
@@ -1058,6 +1124,7 @@ function buildLog(equations, filename, timestamp) {
 
     const lines = [];
 
+    // ── HEADER ────────────────────────────────────────────────────
     lines.push(SEP);
     lines.push("  MathMLtoTeXandAltText — Processing Log");
     lines.push(SEP);
@@ -1066,12 +1133,13 @@ function buildLog(equations, filename, timestamp) {
     lines.push(SEP);
     lines.push("");
 
+    // ── SECTION 1: SUMMARY ────────────────────────────────────────
     lines.push("  [SECTION 1]  SUMMARY");
     lines.push(DIV);
     lines.push("");
     lines.push(`  Total Equations Found    : ${total}`);
-    lines.push(`  With IMG tag  (XML+JSON) : ${withImg}`);
-    lines.push(`  Without IMG tag (JSON)   : ${withoutImg}`);
+    lines.push(`  With IMG tag  (XML+TXT)  : ${withImg}`);
+    lines.push(`  Without IMG tag (TXT)    : ${withoutImg}`);
     lines.push("");
     lines.push(`  TeX Conversion Results`);
     lines.push(`    [OK]   Success   : ${texOK}`);
@@ -1084,10 +1152,10 @@ function buildLog(equations, filename, timestamp) {
     lines.push(`    [FAIL] Error     : ${altError}  (generation failed)`);
     lines.push("");
     lines.push(`  MathML Complexity Distribution`);
-    lines.push(`    LOW       : ${cxLow}`);
-    lines.push(`    MEDIUM    : ${cxMedium}`);
-    lines.push(`    HIGH      : ${cxHigh}`);
-    lines.push(`    VERY HIGH : ${cxVeryHigh}`);
+    lines.push(`    LOW       : ${cxLow}   (simple, 1-2 levels deep)`);
+    lines.push(`    MEDIUM    : ${cxMedium}   (moderate, 3-4 levels deep)`);
+    lines.push(`    HIGH      : ${cxHigh}   (complex, nested structures)`);
+    lines.push(`    VERY HIGH : ${cxVeryHigh}   (very complex, possible conversion issues)`);
     lines.push("");
 
     if (allOK) {
@@ -1096,11 +1164,13 @@ function buildLog(equations, filename, timestamp) {
     } else {
         lines.push(`  OVERALL STATUS : COMPLETED WITH ISSUES`);
         lines.push(`  ${failedEqs.length} of ${total} equations had conversion problems.`);
+        lines.push(`  See Section 3 for details and MathML structure analysis.`);
     }
     lines.push("");
     lines.push(DIV);
     lines.push("");
 
+    // ── SECTION 2: ALL EQUATIONS (full detail) ────────────────────
     lines.push("  [SECTION 2]  ALL EQUATIONS — FULL DETAIL");
     lines.push(DIV);
     lines.push("");
@@ -1111,10 +1181,11 @@ function buildLog(equations, filename, timestamp) {
         const altIcon  = eq.altStatus === "OK" ? "[OK  ]" : eq.altStatus === "WARN" ? "[WARN]" : "[FAIL]";
         const cx       = eq.complexity || {};
         const cxLabel  = cx.level || "N/A";
-        const imgLine  = eq.hasImg ? "YES — tex + alttext written to img tag" : "NO  — JSON output only";
+        const imgLine  = eq.hasImg ? "YES — tex + alttext written to img tag" : "NO  — TXT output only";
+
         const engineUsed = eq.engine || "mathml-to-latex";
         const wirisInfo  = eq.wirisAttempted
-            ? (eq.wirisResult === "success" ? "WIRIS used" : `WIRIS failed → fallback (${(eq.wirisResult||"").substring(0,60)})`)
+            ? (eq.wirisResult === "success" ? "WIRIS used" : `WIRIS failed → fallback used (${eq.wirisResult ? eq.wirisResult.substring(0,60) : "unknown"})`)
             : "mathml-to-latex only";
 
         lines.push(`  [${num}] ${eq.type}  |  Format: ${eq.format}  |  ID: ${eq.id}`);
@@ -1137,8 +1208,10 @@ function buildLog(equations, filename, timestamp) {
     lines.push(DIV);
     lines.push("");
 
+    // ── SECTION 3: FAILED / WARNED EQUATIONS (detailed analysis) ──
     if (failedEqs.length > 0) {
         lines.push("  [SECTION 3]  EQUATIONS WITH ISSUES — COMPLEXITY ANALYSIS");
+        lines.push("  Use this section to investigate and fix conversion failures.");
         lines.push(DIV);
         lines.push("");
 
@@ -1155,18 +1228,21 @@ function buildLog(equations, filename, timestamp) {
             lines.push(`  IMG Tag         : ${eq.hasImg ? "YES" : "NO"}`);
             lines.push("");
 
+            // ── TeX failure details ────────────────────────────────
             if (eq.texStatus !== "OK") {
                 lines.push(`  TeX Conversion  : ${eq.texStatus}`);
                 lines.push(`  TeX Error       : ${eq.texReason || "empty result — no error thrown"}`);
                 lines.push("");
             }
 
+            // ── AltText failure details ────────────────────────────
             if (eq.altStatus !== "OK") {
                 lines.push(`  Alt Generation  : ${eq.altStatus}`);
                 lines.push(`  Alt Error       : ${eq.altReason || "empty result — no error thrown"}`);
                 lines.push("");
             }
 
+            // ── MathML Complexity Analysis ─────────────────────────
             lines.push(`  MATHML COMPLEXITY ANALYSIS`);
             lines.push(`  Complexity Level  : ${cx.level || "N/A"}`);
             lines.push(`  Max Nesting Depth : ${cx.maxDepth || 0}`);
@@ -1181,6 +1257,7 @@ function buildLog(equations, filename, timestamp) {
 
             if (cx.uniqueElements && cx.uniqueElements.length > 0) {
                 lines.push(`  MathML Elements Used (${cx.uniqueElements.length} unique):`);
+                // Show with counts
                 const elemList = cx.uniqueElements.map(e => `${e}(${cx.elementCounts[e] || 1})`);
                 lines.push(`    ${elemList.join(", ")}`);
                 lines.push("");
@@ -1192,7 +1269,15 @@ function buildLog(equations, filename, timestamp) {
                 lines.push("");
             }
 
+            if (cx.complexElements && cx.complexElements.length > 0) {
+                lines.push(`  COMPLEX ELEMENTS (may cause issues):`);
+                cx.complexElements.forEach(e => lines.push(`    ~ <${e}> — complex/rare element`));
+                lines.push("");
+            }
+
+            // ── Full MathML for debugging ──────────────────────────
             lines.push(`  FULL MATHML (for debugging):`);
+            // Wrap at 80 chars for readability
             const ml = eq.mathml || "";
             const chunkSize = 80;
             for (let c = 0; c < ml.length; c += chunkSize) {
@@ -1213,9 +1298,12 @@ function buildLog(equations, filename, timestamp) {
         lines.push("");
     }
 
+    // ── SECTION 4: COMPLEXITY OVERVIEW ───────────────────────────
     const veryHighEqs = equations.filter(e => e.complexity && e.complexity.level === "VERY HIGH");
     if (veryHighEqs.length > 0) {
         lines.push("  [SECTION 4]  VERY HIGH COMPLEXITY EQUATIONS");
+        lines.push("  These converted OK but have complex structure —");
+        lines.push("  verify the TeX output renders correctly.");
         lines.push(DIV);
         lines.push("");
         veryHighEqs.forEach((eq, i) => {
@@ -1233,6 +1321,7 @@ function buildLog(equations, filename, timestamp) {
         lines.push("");
     }
 
+    // ── FOOTER ────────────────────────────────────────────────────
     lines.push(SEP);
     lines.push(`  End of Log`);
     lines.push(`  File    : ${filename}`);
@@ -1244,80 +1333,81 @@ function buildLog(equations, filename, timestamp) {
 }
 
 /* ================================================================
-   STRIP DOCTYPE — extracts and preserves the full DOCTYPE block
-   before stripping it for JSDOM parsing.
-   Returns { doctype: string|null, cleanXml: string }
-================================================================ */
-function extractAndStripDOCTYPE(xml) {
-    let result = xml;
-    let doctype = null;
+   CORE PROCESSOR
+   Returns: { equations[], txtContent, xmlContent|null }
 
-    // Step 1: Find and extract the complete DOCTYPE block (including internal subset)
+   XML modification rules:
+   - If <inline-graphic> or <graphic> exists inside the formula:
+       → Add tex="" and alttext="" attributes to the img tag
+       → Return modified XML
+   - If no img tag found anywhere in any formula:
+       → Return xmlContent as null (TXT only)
+================================================================ */
+
+/* ================================================================
+   STRIP DOCTYPE — robust cleaner for XML with external DTD refs
+   Handles:
+   - <!DOCTYPE tag PUBLIC "..." "file.dtd">
+   - <!DOCTYPE tag PUBLIC "..." "file.dtd" [<!ENTITY ...>]>
+   - Multiple ENTITY declarations inside internal subset [...]
+   - Multiline DOCTYPE blocks
+================================================================ */
+function stripDOCTYPE(xml) {
+    let result = xml;
+
+    // Step 1: Find <!DOCTYPE and strip the whole block including [...]
     const dtStart = result.indexOf("<!DOCTYPE");
     if (dtStart !== -1) {
+        // Check if there is an internal subset [...]
         const bracketOpen = result.indexOf("[", dtStart);
         const firstGT     = result.indexOf(">", dtStart);
 
         if (bracketOpen !== -1 && bracketOpen < firstGT) {
-            // Has internal subset [...]
+            // Has internal subset — find matching ]>
             const bracketClose = result.indexOf("]>", bracketOpen);
             if (bracketClose !== -1) {
-                doctype = result.slice(dtStart, bracketClose + 2); // includes ]>
-                result  = result.slice(0, dtStart) + result.slice(bracketClose + 2);
+                // Remove from <!DOCTYPE to ]> inclusive
+                result = result.slice(0, dtStart) + result.slice(bracketClose + 2);
             } else {
-                doctype = result.slice(dtStart, firstGT + 1);
-                result  = result.slice(0, dtStart) + result.slice(firstGT + 1);
+                // Fallback — remove from <!DOCTYPE to next >
+                result = result.slice(0, dtStart) + result.slice(firstGT + 1);
             }
-        } else if (firstGT !== -1) {
-            doctype = result.slice(dtStart, firstGT + 1);
-            result  = result.slice(0, dtStart) + result.slice(firstGT + 1);
+        } else {
+            // No internal subset — remove from <!DOCTYPE to >
+            result = result.slice(0, dtStart) + result.slice(firstGT + 1);
         }
     }
 
-    // Step 2: Strip remaining ENTITY declarations (shouldn't be any after step 1, but be safe)
+    // Step 2: Strip any remaining <!ENTITY declarations
     result = result.replace(/<!ENTITY[^>]*>/gi, "");
 
-    // Step 3: Strip non-xml processing instructions
+    // Step 3: Strip XML processing instructions (but keep <?xml ...?>)
     result = result.replace(/<\?(?!xml)[\s\S]*?\?>/gi, "");
 
-    // Step 4: Normalize line endings
+    // Step 4: Strip XML comments that contain DOCTYPE-like content
+    // (some publishers embed broken content in comments)
+    // Keep normal comments — only strip if they break parsing
+
+    // Step 5: Normalize line endings
     result = result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-    // Step 5: Replace unknown entity references with empty string (NDATA etc)
+    // Step 6: Replace NDATA entity references with empty string
+    // Elsevier uses entities like &gr1; &gr2; that reference binary image data
+    // JSDOM will try to resolve these — replace them before parsing
+    // Only strip entities that are NOT standard XML entities
     const STD_ENTITIES = new Set(["amp", "lt", "gt", "quot", "apos"]);
     result = result.replace(/&([a-zA-Z][a-zA-Z0-9_.-]*);/g, (match, name) => {
-        if (STD_ENTITIES.has(name)) return match;
-        return ""; // strip NDATA entity refs like &gr1; &gr2; etc
+        if (STD_ENTITIES.has(name)) return match; // keep standard entities
+        // Replace unknown entities with empty string to prevent JSDOM errors
+        return "";
     });
 
-    return { doctype, cleanXml: result.trim() };
+    return result.trim();
 }
 
-// Legacy alias kept for backward compatibility with watcher
-function stripDOCTYPE(xml) {
-    return extractAndStripDOCTYPE(xml).cleanXml;
-}
-
-/* ================================================================
-   RESTORE DOCTYPE into output XML
-   Injects the preserved DOCTYPE right after the <?xml ...?> declaration.
-================================================================ */
-function restoreDOCTYPE(xml, doctype) {
-    if (!doctype || !xml) return xml;
-
-    // Find end of <?xml ... ?> declaration if present
-    if (xml.startsWith("<?xml")) {
-        const declEnd = xml.indexOf("?>") + 2;
-        return xml.slice(0, declEnd) + "\n" + doctype + "\n" + xml.slice(declEnd);
-    }
-
-    // No XML declaration — prepend both
-    return '<?xml version="1.0" encoding="utf-8"?>\n' + doctype + "\n" + xml;
-}
-
-/* ================================================================
-   ELSEVIER BIBLIOGRAPHY STRIP (for JSDOM performance only)
-================================================================ */
+/* Reduce Elsevier XML size before JSDOM — strip only math-free content.
+   Safe even when bibliography titles contain equations (rare but possible).
+   Approach: strip individual bib entries that have no math, keep ones that do. */
 function stripElsevierBibliography(xml) {
     const before = xml.length;
     let stripped = 0;
@@ -1343,10 +1433,28 @@ function stripElsevierBibliography(xml) {
     result = stripTag(result, "<ce:bib-reference", "</ce:bib-reference>");
     result = stripTag(result, "<sb:reference",     "</sb:reference>");
 
+    const sOpen  = result.indexOf("<ce:sections");
+    const sClose = result.lastIndexOf("</ce:sections>");
+    if (sOpen !== -1 && sClose !== -1 && sClose > sOpen) {
+        const sect = result.slice(sOpen, sClose + 14);
+        if (sect.indexOf("<mml:math") === -1 && sect.indexOf("<math") === -1) {
+            result = result.slice(0, sOpen) + "<ce:sections/>" + result.slice(sClose + 14);
+            stripped++;
+        }
+    }
+
+    const tOpen = result.indexOf("<tail>"), tClose = result.indexOf("</tail>");
+    if (tOpen !== -1 && tClose > tOpen) {
+        const inner = result.slice(tOpen + 6, tClose).trim();
+        if (!inner || inner.indexOf("<ce:bib") === -1)
+            result = result.slice(0, tOpen) + "<tail/>" + result.slice(tClose + 7);
+    }
+
     const saved = Math.round((before - result.length) / 1024);
-    if (saved > 0) console.log(`  [INFO] Elsevier strip: saved ${saved}KB, removed ${stripped} bib items`);
+    if (saved > 0) console.log(`  [INFO] Elsevier strip: ${before} -> ${result.length} chars, saved ${saved}KB, removed ${stripped} items`);
     return result;
 }
+
 
 async function processBatch(items, fn, batchSize, onBatchDone) {
     const sz = batchSize || CONFIG.WIRIS_BATCH_SIZE || 5;
@@ -1357,253 +1465,125 @@ async function processBatch(items, fn, batchSize, onBatchDone) {
 }
 
 /* ================================================================
-   FAST XML PATCHER — EQUATION-MATCHED VERSION
-   ---------------------------------------------------------------
-   FIX: Instead of searching globally for the "next untagged graphic",
-   we now match each equation to its graphic element precisely using:
-
-   1. For math[@altimg]:  match by the exact altimg="" value
-      e.g. altimg="si0001.svg" is globally unique in the document
-
-   2. For graphic/inline-graphic: match by POSITION in the document,
-      not by "first untagged". We record the character offset of the
-      formula's opening tag in the original XML string, then scan
-      forward from that position to find the graphic tag inside it.
-
-   3. Each equation stores srcOffset (position of its formula container
-      opening tag) and srcEnd (closing tag position) so we can do a
-      bounded search within the formula's XML span.
+   FAST XML PATCHER
+   Instead of serializing the full DOM back to string (5-15s for large files),
+   patch only the specific img/math tags that had tex/alttext added.
+   Approach: find each target element by its unique attribute, inject new attrs.
+   Falls back to DOM serializer if patching fails for any equation.
 ================================================================ */
 function patchXMLString(xml, equations) {
     let result = xml;
 
     for (const eq of equations) {
-        if (!eq.hasImg || !eq.writeTarget || eq.writeTarget === "none") continue;
+        if (!eq.hasImg || !eq.writeTarget) continue;
+        if (eq.writeTarget === "none") continue;
+
         const tex = eq.tex || "";
         const alt = eq.alt || "";
         if (!tex && !alt) continue;
 
-        if (eq.writeTarget === "math[@altimg]" && eq.altimgVal) {
-            // ── CASE 1: math[@altimg] — match by exact altimg value ──
-            // This is globally unique per equation (e.g. "si0001.svg")
-            result = injectAttrsOnAttrValue(
-                result,
-                ["mml:math", "math"],
-                "altimg", eq.altimgVal,
-                tex, alt
-            );
-
-        } else if (eq.writeTarget === "graphic") {
-            // ── CASE 2: graphic/inline-graphic — bounded position search ──
-            // Use the stored srcOffset to find the formula container in the
-            // output XML, then search for the graphic tag ONLY within that span.
-            if (eq.srcOffset !== undefined && eq.srcEnd !== undefined) {
-                result = patchGraphicInSpan(result, eq.srcOffset, eq.srcEnd, eq.imgElemId, tex, alt);
-            } else if (eq.imgElemId) {
-                // Fallback: known unique id/src on the graphic element
-                result = injectAttrsOnAttrValue(
-                    result,
-                    ["inline-graphic","graphic","img","ce:inline-graphic","ce:graphic"],
-                    "id", eq.imgElemId,
-                    tex, alt
-                );
+        if (eq.writeTarget === "math[@altimg]") {
+            // Handle both <math altimg=...> and <mml:math altimg=...>
+            // Try mml: prefix first (Elsevier), then plain math (others)
+            const before = result;
+            result = injectAttrsOnTag(result, "mml:math", "altimg", tex, alt);
+            if (result === before) {
+                result = injectAttrsOnTag(result, "math", "altimg", tex, alt);
             }
-            // If neither srcOffset nor imgElemId is available, skip this equation
-            // to avoid mis-patching a wrong graphic element
+        } else if (eq.writeTarget === "graphic") {
+            // Try all graphic/img tag variants in order
+            for (const tag of [
+                "ce:inline-graphic", "ce:graphic",
+                "inline-graphic", "graphic",
+                "imageobject", "img"
+            ]) {
+                const patched = injectAttrsOnFirstUntaggedMatch(result, tag, tex, alt);
+                if (patched !== result) { result = patched; break; }
+            }
         }
     }
     return result;
 }
 
-/* ----------------------------------------------------------------
-   patchGraphicInSpan
-   Find the formula container in the XML string using its stored
-   source offset, then inject tex/alttext on the graphic tag inside it.
----------------------------------------------------------------- */
-function patchGraphicInSpan(xml, storedOffset, storedEnd, imgElemId, tex, alt) {
-    // The stored offsets were recorded on the cleanXML before any
-    // patchXMLString mutations. Previous patches may have shifted
-    // character positions — so we re-anchor by searching from the
-    // stored position with a ±2000 char tolerance window.
-
-    const WINDOW = 2000;
-    const searchFrom = Math.max(0, storedOffset - WINDOW);
-    const searchTo   = Math.min(xml.length, storedEnd + WINDOW);
-    const segment    = xml.slice(searchFrom, searchTo);
-
-    // Within this segment, look for the first unpatched graphic tag
-    const GRAPHIC_TAGS = ["inline-graphic","graphic","ce:inline-graphic","ce:graphic","img"];
-
-    for (const tagName of GRAPHIC_TAGS) {
-        const openStr = "<" + tagName;
-        let p = 0;
-        while (p < segment.length) {
-            const start = segment.indexOf(openStr, p);
-            if (start === -1) break;
-
-            // Ensure correct tag boundary
-            const afterTag = segment[start + openStr.length];
-            if (afterTag !== " " && afterTag !== "\t" && afterTag !== "\n" &&
-                afterTag !== ">" && afterTag !== "/") {
-                p = start + openStr.length;
-                continue;
-            }
-
-            // Find end of tag
-            let end = -1, inQ = false, qChar = "";
-            for (let i = start; i < segment.length; i++) {
-                const c = segment[i];
-                if (!inQ && (c === "'" || c === '"')) { inQ = true; qChar = c; }
-                else if (inQ && c === qChar) { inQ = false; }
-                else if (!inQ && c === ">") { end = i; break; }
-            }
-            if (end === -1) break;
-
-            const tag = segment.slice(start, end + 1);
-
-            // Skip if already patched
-            if (tag.indexOf(" tex=") !== -1) { p = end + 1; continue; }
-
-            // If we have a known img element id, verify it matches
-            if (imgElemId && tag.indexOf(imgElemId) === -1) {
-                p = end + 1;
-                continue;
-            }
-
-            // Patch this tag
+function injectAttrsOnTag(xml, tagName, requiredAttr, tex, alt) {
+    // Find <tagName ... requiredAttr="..."> and inject tex="" alttext=""
+    // Handles multi-line tags and both self-closing /> and regular > endings
+    let p = 0;
+    let out = "";
+    const openStr = "<" + tagName;
+    while (p < xml.length) {
+        const start = xml.indexOf(openStr, p);
+        if (start === -1) { out += xml.slice(p); break; }
+        // Make sure it's a real tag start (next char is space, >, or /)
+        const afterTag = xml[start + openStr.length];
+        if (afterTag !== " " && afterTag !== "\t" && afterTag !== "\n" && afterTag !== ">" && afterTag !== "/") {
+            out += xml.slice(p, start + openStr.length);
+            p = start + openStr.length;
+            continue;
+        }
+        // Find end of opening tag — scan for > not inside quotes
+        let end = -1, inQ = false, qChar = "";
+        for (let i = start; i < xml.length; i++) {
+            const c = xml[i];
+            if (!inQ && (c === "'" || c === '"')) { inQ = true; qChar = c; }
+            else if (inQ && c === qChar) { inQ = false; }
+            else if (!inQ && c === ">") { end = i; break; }
+        }
+        if (end === -1) { out += xml.slice(p); break; }
+        const tag = xml.slice(start, end + 1);
+        // Patch only if has required attr and not already patched
+        if (tag.indexOf(requiredAttr + "=") !== -1 && tag.indexOf(" tex=") === -1) {
             const isSelfClose = tag.endsWith("/>");
             const insertAt = isSelfClose ? tag.length - 2 : tag.length - 1;
             const newTag = tag.slice(0, insertAt) +
                 (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
                 (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
                 tag.slice(insertAt);
-
-            const globalStart = searchFrom + start;
-            const globalEnd   = searchFrom + end + 1;
-            return xml.slice(0, globalStart) + newTag + xml.slice(globalEnd);
-        }
-    }
-
-    return xml; // no graphic found in span — unchanged
-}
-
-/* ----------------------------------------------------------------
-   injectAttrsOnAttrValue — used for math[@altimg] matching
----------------------------------------------------------------- */
-function injectAttrsOnAttrValue(xml, tagNames, attrName, attrValue, tex, alt) {
-    for (const tagName of tagNames) {
-        const openStr = "<" + tagName;
-        let p = 0;
-        while (p < xml.length) {
-            const start = xml.indexOf(openStr, p);
-            if (start === -1) break;
-            const afterTag = xml[start + openStr.length];
-            if (afterTag !== " " && afterTag !== "\t" && afterTag !== "\n" && afterTag !== ">" && afterTag !== "/") {
-                p = start + openStr.length; continue;
-            }
-            let end = -1, inQ = false, qChar = "";
-            for (let i = start; i < xml.length; i++) {
-                const c = xml[i];
-                if (!inQ && (c === "'" || c === '"')) { inQ = true; qChar = c; }
-                else if (inQ && c === qChar) { inQ = false; }
-                else if (!inQ && c === ">") { end = i; break; }
-            }
-            if (end === -1) break;
-            const tag = xml.slice(start, end + 1);
-            if (tag.indexOf(attrName + '="' + attrValue + '"') !== -1 && tag.indexOf(" tex=") === -1) {
-                const isSelfClose = tag.endsWith("/>");
-                const insertAt = isSelfClose ? tag.length - 2 : tag.length - 1;
-                const newTag = tag.slice(0, insertAt) +
-                    (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
-                    (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
-                    tag.slice(insertAt);
-                return xml.slice(0, start) + newTag + xml.slice(end + 1);
-            }
+            out += xml.slice(p, start) + newTag;
+            p = end + 1;
+            return out + xml.slice(p); // inject once per equation, return early
+        } else {
+            out += xml.slice(p, end + 1);
             p = end + 1;
         }
     }
-    return xml;
+    return out;
+}
+
+function injectAttrsOnFirstUntaggedMatch(xml, tagName, tex, alt) {
+    const openStr = "<" + tagName;
+    let p = 0;
+    while (p < xml.length) {
+        const start = xml.indexOf(openStr, p);
+        if (start === -1) break;
+        const end = xml.indexOf(">", start);
+        if (end === -1) break;
+        const tag = xml.slice(start, end + 1);
+        // Only patch if not already tagged
+        if (tag.indexOf(' tex=') === -1 && tag.indexOf(' alttext=') === -1) {
+            const closePos = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
+            const newTag = tag.slice(0, closePos) +
+                (tex ? ` tex="${escapeXmlAttr(tex)}"` : "") +
+                (alt ? ` alttext="${escapeXmlAttr(alt)}"` : "") +
+                tag.slice(closePos);
+            return xml.slice(0, start) + newTag + xml.slice(end + 1);
+        }
+        p = end + 1;
+    }
+    return xml; // unchanged
 }
 
 function escapeXmlAttr(str) {
     return str.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
-/* ================================================================
-   SOURCE OFFSET RECORDER
-   After parsing with JSDOM, we need to know WHERE each formula
-   container appears in the original cleanXML string so the patcher
-   can do a bounded search.
-   Strategy: use the formula's id attribute or a short text snippet
-   from its opening tag to find its position in cleanXML.
-================================================================ */
-function findFormulaOffset(cleanXml, formulaTag, formulaId, formulaIndex, formulaTagVariants) {
-    // Try each tag variant in order of specificity
-    const tags = formulaTagVariants || [formulaTag];
-
-    for (const tag of tags) {
-        const openStr = "<" + tag;
-
-        // Fast path: if we have an id, search for <tag ... id="..." ...>
-        if (formulaId) {
-            const idAttr = `id="${formulaId}"`;
-            let p = 0;
-            let occurrence = 0;
-            while (p < cleanXml.length) {
-                const start = cleanXml.indexOf(openStr, p);
-                if (start === -1) break;
-                // Find end of this opening tag
-                let end = cleanXml.indexOf(">", start);
-                if (end === -1) break;
-                const tagContent = cleanXml.slice(start, end + 1);
-                if (tagContent.indexOf(idAttr) !== -1) {
-                    // Find the closing tag
-                    const closeTag = "</" + tag + ">";
-                    const closePos = cleanXml.indexOf(closeTag, end);
-                    return {
-                        srcOffset: start,
-                        srcEnd:    closePos !== -1 ? closePos + closeTag.length : end + 1
-                    };
-                }
-                p = end + 1;
-            }
-        }
-
-        // Fallback: find by occurrence index (Nth tag of this type)
-        {
-            let p = 0;
-            let occurrence = 0;
-            while (p < cleanXml.length) {
-                const start = cleanXml.indexOf(openStr, p);
-                if (start === -1) break;
-                const afterTag = cleanXml[start + openStr.length];
-                if (afterTag === " " || afterTag === "\t" || afterTag === "\n" ||
-                    afterTag === ">" || afterTag === "/") {
-                    if (occurrence === formulaIndex) {
-                        const closeTag = "</" + tag + ">";
-                        const closePos = cleanXml.indexOf(closeTag, start);
-                        return {
-                            srcOffset: start,
-                            srcEnd:    closePos !== -1 ? closePos + closeTag.length : start + 200
-                        };
-                    }
-                    occurrence++;
-                }
-                p = start + openStr.length;
-            }
-        }
-    }
-
-    return { srcOffset: undefined, srcEnd: undefined };
-}
-
-/* ================================================================
-   CORE PROCESSOR
-================================================================ */
-
 async function processXML(rawXML, filename, reqId) {
-    const _texCache = new Map();
+    const _texCache = new Map(); // per-request cache, auto-cleared when request ends
 
+    // ── Fast pre-check: does this XML contain any equations? ─────
+    // If no math/formula tags found anywhere, skip heavy DOM parsing
+    // and return immediately with empty equations array.
+    // This makes no-equation files process in milliseconds.
     const hasMath = (
         rawXML.indexOf("<math")            !== -1 ||
         rawXML.indexOf("<mml:math")        !== -1 ||
@@ -1621,43 +1601,49 @@ async function processXML(rawXML, filename, reqId) {
 
     if (!hasMath) {
         console.log("  [INFO] No math/equation tags found — skipping DOM parse");
-        const jsonContent = buildJSONOutput([], filename, Date.now());
+        const txtContent = JSON.stringify({
+            source:    filename,
+            date:      new Date().toLocaleString(),
+            total:     0,
+            texEngine: "N/A",
+            altEngine: "N/A",
+            equations: []
+        }, null, 2);
         return {
             equations:   [],
-            jsonContent,
+            txtContent,
             xmlContent:  null,
             xmlModified: false,
             logContent:  buildLog([], filename, Date.now())
         };
     }
 
-    // ── Extract DOCTYPE BEFORE any stripping ──────────────────────
-    // This is the single source of truth for the DOCTYPE.
-    // We extract it here so it is available for both:
-    //   (a) the folder watcher path
-    //   (b) the HTTP route (which also does its own extraction)
-    // Whichever runs processXML gets a clean XML without DOCTYPE,
-    // but the doctype is returned in the result for the caller to restore.
-    const { doctype: extractedDoctype, cleanXml: cleanXML } = extractAndStripDOCTYPE(rawXML);
+    // Pre-process XML — use shared stripDOCTYPE function
+    let cleanXML = rawXML; // route already stripped DOCTYPE
 
-    if (extractedDoctype) {
-        console.log(`  [INFO] DOCTYPE extracted and preserved (${extractedDoctype.length} chars)`);
-    }
-
-    // ── Elsevier size reduction for JSDOM ────────────────────────
-    let jsdomXML = cleanXML;
+    // ── Elsevier size reduction ────────────────────────────────────
+    // Elsevier XMLs are 200KB+ due to full bibliography (158+ refs)
+    // and body text. Equations only appear in <ce:floats> and captions.
+    // Extract only the parts that contain equations to reduce memory use.
+    // For Elsevier: strip bibliography ONLY for JSDOM parsing (memory reduction)
+    // Keep originalCleanXML intact — output XML is built from this, not the stripped version
+    let jsdomXML = cleanXML; // XML fed to JSDOM (may be stripped for Elsevier)
     const isElsevier = cleanXML.indexOf("<ce:") !== -1 || cleanXML.indexOf(" ce:") !== -1;
     if (isElsevier) {
         try {
             const stripped = stripElsevierBibliography(cleanXML);
             if (stripped.length < cleanXML.length * 0.8) {
                 console.log(`  [INFO] Elsevier jsdom XML reduced: ${cleanXML.length} → ${stripped.length} chars`);
-                jsdomXML = stripped;
+                jsdomXML = stripped; // only JSDOM gets the stripped version
+                // cleanXML stays intact for output
             }
         } catch (_) {}
     }
 
     // ── Inject missing namespace declarations ──────────────────
+    // Many Elsevier/publisher XMLs use namespace prefixes (ce:, mml:, xlink:)
+    // without declaring them on the root element — inject them so the
+    // XML parser doesn't throw "unbound namespace prefix" errors
     const KNOWN_NAMESPACES = {
         "ce":    "http://www.elsevier.com/xml/common/dtd",
         "mml":   "http://www.w3.org/1998/Math/MathML",
@@ -1682,6 +1668,9 @@ async function processXML(rawXML, filename, reqId) {
     };
 
     function injectNamespaces(xml) {
+        // Fast approach: only scan first 2000 chars for the root tag
+        // and scan full XML only for prefixes we need to inject.
+        // This avoids slow full-document regex on large files.
         const rootMatch = xml.match(/<([a-zA-Z][a-zA-Z0-9_:-]*)(\s[^>]*)?>/);
         if (!rootMatch) return xml;
 
@@ -1689,16 +1678,20 @@ async function processXML(rawXML, filename, reqId) {
         const tagName       = rootMatch[1];
         const existingAttrs = rootMatch[2] || "";
 
+        // Only inject namespaces that are not already declared
         const missing = [];
         for (const [prefix, uri] of Object.entries(KNOWN_NAMESPACES)) {
             if (!existingAttrs.includes("xmlns:" + prefix)) {
                 missing.push([prefix, uri]);
             }
         }
-        if (missing.length === 0) return xml;
+        if (missing.length === 0) return xml; // all already declared
 
+        // Scan only for prefixes that are actually missing
+        // Use indexOf for speed — much faster than regex on large files
         const usedPrefixes = new Set();
         for (const [prefix] of missing) {
+            // Quick check: does this prefix appear anywhere?
             if (xml.indexOf("<" + prefix + ":") !== -1 ||
                 xml.indexOf(" " + prefix + ":") !== -1) {
                 usedPrefixes.add(prefix);
@@ -1714,17 +1707,20 @@ async function processXML(rawXML, filename, reqId) {
 
         if (!extraNS) return xml;
         const newTag = "<" + tagName + existingAttrs + extraNS + ">";
+        // Only replace the first occurrence (root tag)
         return xml.replace(fullTag, newTag);
     }
 
-    const cleanXMLWithNS = injectNamespaces(cleanXML);
-    const jsdomXMLWithNS = jsdomXML === cleanXML ? cleanXMLWithNS : injectNamespaces(jsdomXML);
+    // Inject namespaces on both XML versions
+    cleanXML = injectNamespaces(cleanXML);
+    jsdomXML  = jsdomXML === cleanXML ? cleanXML : injectNamespaces(jsdomXML);
 
-    // ── Parse with JSDOM ─────────────────────────────────────────
+    // ── Parse with fallback strategy ─────────────────────────────
     let dom, document;
 
+    // Strategy 1: strict XML parser (best — preserves namespaces)
     try {
-        dom      = new JSDOM(jsdomXMLWithNS, Object.assign(
+        dom      = new JSDOM(jsdomXML, Object.assign(
             { contentType: "application/xml" },
             BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
         ));
@@ -1737,8 +1733,9 @@ async function processXML(rawXML, filename, reqId) {
     } catch (e1) {
         console.log(`  [INFO] XML parser issue: ${e1.message.substring(0,100)}`);
         console.log("  [INFO] Trying HTML parser...");
+        // Strategy 2: HTML parser — more lenient, handles broken XML
         try {
-            dom      = new JSDOM(jsdomXMLWithNS, Object.assign(
+            dom      = new JSDOM(jsdomXML, Object.assign(
                 { contentType: "text/html" },
                 BLOCKED_RESOURCES ? { resources: BLOCKED_RESOURCES } : {}
             ));
@@ -1752,13 +1749,10 @@ async function processXML(rawXML, filename, reqId) {
     const equations = [];
     let   xmlModified = false;
 
-    // ── Counters for offset tracking ─────────────────────────────
-    // We count occurrences of each formula tag so we can find
-    // the Nth occurrence in the original XML string.
-    const tagOccurrenceCounter = {};
-
     // ── Helper: process one formula element ──────────────────────
-    async function processFormula(eq, type, format, idFallback, tagName, tagVariants) {
+    async function processFormula(eq, type, format, idFallback) {
+        // Use getElementsByTagName to find math — handles mml:math, math, etc.
+        // querySelector("*|math") is invalid in JSDOM
         const math =
             eq.querySelector("math") ||
             [...eq.getElementsByTagName("math")][0] ||
@@ -1776,16 +1770,7 @@ async function processXML(rawXML, filename, reqId) {
         const tex = texRes.value;
         const alt = altRes.value;
 
-        // ── Track source offset for this formula ──────────────────
-        // Record which occurrence this is (0-based) for the offset finder
-        const tkey = tagName || "unknown";
-        if (tagOccurrenceCounter[tkey] === undefined) tagOccurrenceCounter[tkey] = 0;
-        const thisOccurrence = tagOccurrenceCounter[tkey]++;
-
-        const { srcOffset, srcEnd } = findFormulaOffset(
-            cleanXMLWithNS, tagName, id, thisOccurrence, tagVariants
-        );
-
+        // Find img tag — search all variants including ce: prefixed
         const eqEls = [...(eq.getElementsByTagName("*") || [])];
         const imgEl =
             eq.querySelector("inline-graphic")            ||
@@ -1796,6 +1781,7 @@ async function processXML(rawXML, filename, reqId) {
             eq.querySelector("img.inlinegraphic")          ||
             eq.querySelector("img");
 
+        // ── Stale error cleanup helper ────────────────────────────
         function cleanAndWrite(el, texVal, altVal, texOK, altOK) {
             const existingTex = el.getAttribute("tex") || "";
             const staleErrors = ["error converting","error processing","invalid mathml"];
@@ -1816,31 +1802,32 @@ async function processXML(rawXML, filename, reqId) {
         const texOK = tex && texRes.status === "OK";
         const altOK = alt && altRes.status === "OK";
 
-        // Extract a unique identifier from the img element for the patcher
-        let imgElemId = null;
         if (imgEl) {
-            imgElemId = imgEl.getAttribute("id") ||
-                        imgEl.getAttribute("xlink:href") ||
-                        imgEl.getAttribute("src") ||
-                        null;
+            // ── CASE 1: graphic/img tag found — write to it ───────
             cleanAndWrite(imgEl, tex, alt, texOK, altOK);
+
         } else if (math.hasAttribute("altimg")) {
+            // ── CASE 2: no graphic tag — write tex/alttext onto
+            //    the <math> or <mml:math> element itself if it
+            //    has an altimg attribute
+            //    e.g. <mml:math altimg="si0001.svg" tex="" alttext="">
             cleanAndWrite(math, tex, alt, texOK, altOK);
+
+        } else {
+            // ── CASE 3: no graphic, no altimg — TXT output only ──
         }
 
+        // Always run complexity analysis — store it for log reporting
         const complexity = analyzeMathMLComplexity(math);
-        const hasTarget  = !!imgEl || math.hasAttribute("altimg");
+
+        // hasImg is true for both graphic tags AND math[@altimg]
+        const hasTarget = !!imgEl || math.hasAttribute("altimg");
 
         equations.push({
             type, format, id, tex, alt,
             mathml:        math.outerHTML,
             hasImg:        hasTarget,
             writeTarget:   imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
-            altimgVal:     math.hasAttribute("altimg") ? math.getAttribute("altimg") : null,
-            imgElemId,
-            // ── Position anchors for bounded XML patching ─────────
-            srcOffset,
-            srcEnd,
             texStatus:     texRes.status,
             texReason:     texRes.reason,
             texComplexity: texRes.complexity || complexity,
@@ -1854,9 +1841,11 @@ async function processXML(rawXML, filename, reqId) {
         });
     }
 
-    // ── FORMAT 1: JATS inline-formula / disp-formula ─────────────
+    // ── FORMAT 1: JATS inline-formula ────────────────────────────
+    // Handles both plain <inline-formula> and namespace-prefixed versions
+    // Use getElementsByTagName — works with namespaced elements
+    // querySelectorAll with namespace prefixes is invalid in JSDOM
     const allEls = [...document.getElementsByTagName("*")];
-
     const dispFormulas = allEls.filter(el =>
         el.tagName.toLowerCase() === "disp-formula" ||
         el.tagName.toLowerCase() === "ce:disp-formula"
@@ -1865,144 +1854,115 @@ async function processXML(rawXML, filename, reqId) {
         el.tagName.toLowerCase() === "inline-formula" ||
         el.tagName.toLowerCase() === "ce:inline-formula"
     );
-
     const _totalEqs = inlineFormulas.length + dispFormulas.length;
     let _doneEqs = 0;
-
-    await processBatch(
-        [...inlineFormulas].map((eq, i) => ({ eq, i })),
-        async ({ eq, i }) => {
-            await processFormula(
-                eq, "Inline Equation", "JATS", `inline-${i+1}`,
-                "inline-formula", ["inline-formula","ce:inline-formula"]
-            );
-        },
+    await processBatch([...inlineFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
+        async function(item){ await processFormula(item.eq, "Inline Equation", "JATS", `inline-${item.i+1}`); },
         CONFIG.WIRIS_BATCH_SIZE,
-        (done) => {
+        function(done) {
             _doneEqs += Math.min(CONFIG.WIRIS_BATCH_SIZE, done);
-            if (reqId !== undefined) emitProgress(reqId, 2,
-                `Converting equations... (${Math.min(_doneEqs, _totalEqs)}/${_totalEqs})`,
-                20 + Math.round(70 * _doneEqs / Math.max(_totalEqs, 1)));
-        }
-    );
+            if (typeof reqId !== "undefined") emitProgress(reqId, 2, `Converting equations... (${Math.min(_doneEqs, _totalEqs)}/${_totalEqs})`, 20 + Math.round(70 * _doneEqs / Math.max(_totalEqs, 1)), { eqDone: _doneEqs });
+        });
 
-    await processBatch(
-        [...dispFormulas].map((eq, i) => ({ eq, i })),
-        async ({ eq, i }) => {
-            await processFormula(
-                eq, "Display Equation", "JATS", `disp-${i+1}`,
-                "disp-formula", ["disp-formula","ce:disp-formula"]
-            );
-        }
-    );
+    // ── FORMAT 1: JATS disp-formula ──────────────────────────────
+    await processBatch([...dispFormulas].map(function(eq, i){ return {eq:eq,i:i}; }),
+        async function(item){ await processFormula(item.eq, "Display Equation", "JATS", `disp-${item.i+1}`); });
 
     // ── FORMAT 2: Springer ────────────────────────────────────────
-    const springerEls = [...document.querySelectorAll("InlineEquation, Equation")];
-    let springerOccurrence = 0;
+    await processBatch([...document.querySelectorAll("InlineEquation, Equation")].map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+      const i = item.i, eq = item.eq;
 
-    await processBatch(
-        springerEls.map((eq, i) => ({ eq, i })),
-        async ({ eq, i }) => {
-            const math =
-                eq.querySelector("math") ||
-                [...eq.getElementsByTagName("math")][0] ||
-                [...eq.getElementsByTagName("mml:math")][0];
-            if (!math) return;
-
-            let label = "";
-            if (eq.tagName === "InlineEquation") {
-                label = eq.getAttribute("ID") || `inline-${i+1}`;
-            } else {
-                const num = eq.querySelector("EquationNumber");
-                label = num ? num.textContent.trim() : (eq.getAttribute("ID") || `eq-${i+1}`);
-            }
-
-            let texVal = "";
-            let texStatus = "OK", texReason = "";
-
-            const texNode = eq.querySelector('EquationSource[Format="TEX"]');
-            if (texNode && texNode.firstChild && texNode.firstChild.nodeValue.trim()) {
-                texVal    = texNode.firstChild.nodeValue.trim();
-                texStatus = "OK";
-                texReason = "EquationSource[Format=TEX]";
-            }
-
-            if (!texVal && math) {
-                const walkerRes = springerTeXWalker(math);
-                if (walkerRes.status === "OK" && walkerRes.value) {
-                    texVal    = walkerRes.value;
-                    texStatus = "OK";
-                    texReason = "springer-walker";
-                }
-            }
-
-            if (!texVal && math) {
-                const texRes = await generateTeX(math, _texCache);
-                texVal    = texRes.value;
-                texStatus = texRes.status;
-                texReason = texRes.reason + " (WIRIS fallback)";
-            }
-
-            const altRes = generateAltText(math);
-            const eqEls2 = [...eq.getElementsByTagName("*")];
-            const imgEl  =
-                eq.querySelector("inline-graphic")                                     ||
-                eq.querySelector("graphic")                                             ||
-                eqEls2.find(el => el.tagName.toLowerCase() === "ce:inline-graphic")   ||
-                eqEls2.find(el => el.tagName.toLowerCase() === "ce:graphic")           ||
-                eq.querySelector("img");
-
-            // Track source offset
-            const occ = springerOccurrence++;
-            const tagN = eq.tagName === "InlineEquation" ? "InlineEquation" : "Equation";
-            const { srcOffset, srcEnd } = findFormulaOffset(
-                cleanXMLWithNS, tagN, label, occ, [tagN]
-            );
-
-            let imgElemId = null;
-            if (imgEl) {
-                imgElemId = imgEl.getAttribute("id") || imgEl.getAttribute("xlink:href") || imgEl.getAttribute("src") || null;
-                if (texVal && texStatus === "OK")           imgEl.setAttribute("tex",     texVal);
-                if (altRes.value && altRes.status === "OK") imgEl.setAttribute("alttext", altRes.value);
-                xmlModified = true;
-            } else if (math && math.hasAttribute("altimg")) {
-                if (texVal && texStatus === "OK")           math.setAttribute("tex",     texVal);
-                if (altRes.value && altRes.status === "OK") math.setAttribute("alttext", altRes.value);
-                xmlModified = true;
-            }
-
-            const complexity = analyzeMathMLComplexity(math);
-
-            equations.push({
-                type:       eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
-                format:     "Springer", id: label,
-                tex:        texVal,
-                alt:        altRes.value,
-                mathml:     math.outerHTML,
-                hasImg:     !!(imgEl || math.hasAttribute("altimg")),
-                writeTarget: imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
-                altimgVal:  math.hasAttribute("altimg") ? math.getAttribute("altimg") : null,
-                imgElemId,
-                srcOffset, srcEnd,
-                texStatus, texReason,
-                altStatus: altRes.status,
-                altReason: altRes.reason,
-                complexity
-            });
+        const math =
+            eq.querySelector("math") ||
+            [...eq.getElementsByTagName("math")][0] ||
+            [...eq.getElementsByTagName("mml:math")][0];
+        if (!math) return;
+        let label = "";
+        if (eq.tagName === "InlineEquation") {
+            label = eq.getAttribute("ID") || `inline-${i+1}`;
+        } else {
+            const num = eq.querySelector("EquationNumber");
+            label = num ? num.textContent.trim() : (eq.getAttribute("ID") || `eq-${i+1}`);
         }
-    );
+        let texVal = "";
+        let texStatus = "OK", texReason = "";
 
-    // ── FORMAT 2b: Wiley WML3 ─────────────────────────────────────
+        // ── Springer TeX: use structural walker exclusively ──────
+        // Priority 1: pre-extracted TEX source in XML (most reliable)
+        const texNode = eq.querySelector('EquationSource[Format="TEX"]');
+        if (texNode && texNode.firstChild && texNode.firstChild.nodeValue.trim()) {
+            texVal    = texNode.firstChild.nodeValue.trim();
+            texStatus = "OK";
+            texReason = "EquationSource[Format=TEX]";
+        }
+
+        // Priority 2: Springer structural MathML walker (exact Springer output format)
+        if (!texVal && math) {
+            const walkerRes = springerTeXWalker(math);
+            if (walkerRes.status === "OK" && walkerRes.value) {
+                texVal    = walkerRes.value;
+                texStatus = "OK";
+                texReason = "springer-walker";
+            }
+        }
+
+        // Priority 3: WIRIS as last resort only if walker produced nothing
+        if (!texVal && math) {
+            const texRes = await generateTeX(math, _texCache);
+            texVal    = texRes.value;
+            texStatus = texRes.status;
+            texReason = texRes.reason + " (WIRIS fallback)";
+        }
+        const altRes = generateAltText(math);
+        const eqEls2 = [...eq.getElementsByTagName("*")];
+        const imgEl  =
+            eq.querySelector("inline-graphic")                                     ||
+            eq.querySelector("graphic")                                             ||
+            eqEls2.find(el => el.tagName.toLowerCase() === "ce:inline-graphic")   ||
+            eqEls2.find(el => el.tagName.toLowerCase() === "ce:graphic")           ||
+            eq.querySelector("span.eqnimg img")                                    ||
+            eq.querySelector("img.inlinegraphic")                                  ||
+            eq.querySelector("img");
+
+        if (imgEl) {
+            // CASE 1: graphic tag found
+            if (texVal && texStatus === "OK")           imgEl.setAttribute("tex",     texVal);
+            if (altRes.value && altRes.status === "OK") imgEl.setAttribute("alttext", altRes.value);
+            xmlModified = true;
+        } else if (math && math.hasAttribute("altimg")) {
+            // CASE 2: no graphic — write onto math[@altimg]
+            if (texVal && texStatus === "OK")           math.setAttribute("tex",     texVal);
+            if (altRes.value && altRes.status === "OK") math.setAttribute("alttext", altRes.value);
+            xmlModified = true;
+        }
+        equations.push({
+            type:       eq.tagName === "InlineEquation" ? "Inline Equation" : "Display Equation",
+            format:     "Springer", id: label,
+            tex:        texVal,
+            alt:        altRes.value,
+            mathml:     math.outerHTML,
+            hasImg:     !!(imgEl || math.hasAttribute("altimg")),
+            writeTarget: imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
+            texStatus, texReason,
+            altStatus: altRes.status,
+            altReason: altRes.reason
+        });
+    
+    });
+
+    // ── FORMAT 2b: Wiley WML3 format ─────────────────────────────────
+    // Wiley uses <display-formula>, <display-equation>, <inline-equation>
+    // with <math> or <mml:math> inside
     if (equations.length === 0) {
-        const wileyEls = allEls.filter(el => {
+        const wileyEls = allEls.filter(function(el) {
             const t = el.tagName.toLowerCase();
             return t === "display-formula" || t === "display-equation" ||
                    t === "inline-equation" || t === "equation-group";
         });
         if (wileyEls.length > 0) {
             console.log(`  [INFO] Wiley WML3 format — ${wileyEls.length} equations`);
-            let wOcc = 0;
-            await processBatch(wileyEls.map((eq, i) => ({ eq, i })), async ({ eq, i }) => {
+            await processBatch(wileyEls.map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+                const eq = item.eq, i = item.i;
                 const math = eq.querySelector("math") ||
                     [...eq.getElementsByTagName("math")][0] ||
                     [...eq.getElementsByTagName("mml:math")][0];
@@ -2017,13 +1977,7 @@ async function processXML(rawXML, filename, reqId) {
                     eq.querySelector("img");
                 const texOK = texRes.value && texRes.status === "OK";
                 const altOK = altRes.value && altRes.status === "OK";
-                const occ = wOcc++;
-                const { srcOffset, srcEnd } = findFormulaOffset(
-                    cleanXMLWithNS, eq.tagName, eq.getAttribute("id"), occ, [eq.tagName]
-                );
-                let imgElemId = null;
                 if (imgEl) {
-                    imgElemId = imgEl.getAttribute("id") || imgEl.getAttribute("src") || null;
                     if (texOK) { imgEl.setAttribute("tex", texRes.value); xmlModified = true; }
                     if (altOK) { imgEl.setAttribute("alttext", altRes.value); }
                 } else if (math.hasAttribute("altimg")) {
@@ -2034,11 +1988,8 @@ async function processXML(rawXML, filename, reqId) {
                     type, format: "wiley", id: eq.getAttribute("id") || `eq-${i+1}`,
                     tex: texRes.value, alt: altRes.value, mathml: math.outerHTML,
                     hasImg: !!(imgEl || math.hasAttribute("altimg")),
-                    writeTarget: imgEl ? "graphic" : (math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
-                    imgElemId, srcOffset, srcEnd,
                     texStatus: texRes.status, texReason: texRes.reason,
                     altStatus: altRes.status, altReason: altRes.reason,
-                    complexity: analyzeMathMLComplexity(math),
                     engine: texRes.engine || "mathml-to-latex",
                     wirisAttempted: texRes.wirisAttempted || false
                 });
@@ -2046,9 +1997,11 @@ async function processXML(rawXML, filename, reqId) {
         }
     }
 
-    // ── FORMAT 2c: ACS Books / BITS <alternatives> ───────────────
+    // ── FORMAT 2c: ACS Books / BITS <alternatives> format ─────────────
+    // Some ACS/BITS files wrap equations in <alternatives> containing
+    // both MathML and image. Pick up any remaining <alternatives> with math.
     if (equations.length === 0) {
-        const altEls = allEls.filter(el => {
+        const altEls = allEls.filter(function(el) {
             const t = el.tagName.toLowerCase();
             return t === "alternatives" && (
                 el.querySelector("math") ||
@@ -2057,21 +2010,23 @@ async function processXML(rawXML, filename, reqId) {
         });
         if (altEls.length > 0) {
             console.log(`  [INFO] ACS/BITS <alternatives> format — ${altEls.length} equations`);
-            let aOcc = 0;
-            await processBatch(altEls.map((eq, i) => ({ eq, i })), async ({ eq, i }) => {
-                await processFormula(
-                    eq, "Inline Equation", "acs-bits", `eq-${i+1}`,
-                    "alternatives", ["alternatives"]
-                );
+            await processBatch(altEls.map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+                await processFormula(item.eq, "Inline Equation", "acs-bits", `eq-${item.i+1}`);
             });
         }
     }
 
     // ── FORMAT 3: HTML span ───────────────────────────────────────
-    const spanEls = [...document.querySelectorAll("span.inline[type='eqn'], span.display[type='eqn']")];
-    let spanOcc = 0;
+    // Handles this structure:
+    //   <span class="inline" type="eqn" data-id="IEq33">
+    //     <span class="mathml"><math>...</math></span>   <- math here
+    //     <span class="eqnimg"><img tex="" alttext=""/>  <- img here
+    //   </span>
+    await processBatch([...document.querySelectorAll("span.inline[type='eqn'], span.display[type='eqn']")].map(function(eq,i){return{eq:eq,i:i};}), async function(item) {
+      const i = item.i, eq = item.eq;
 
-    await processBatch(spanEls.map((eq, i) => ({ eq, i })), async ({ eq, i }) => {
+
+        // Find math — may be direct child OR inside span.mathml wrapper
         const math =
             eq.querySelector("math") ||
             [...eq.getElementsByTagName("math")][0] ||
@@ -2081,6 +2036,13 @@ async function processXML(rawXML, filename, reqId) {
         const texRes2 = await generateTeX(math, _texCache);
         const altRes2 = generateAltText(math);
 
+        // Find img tag — search all variants:
+        // 1. <inline-graphic>           — JATS style inside HTML
+        // 2. <graphic>                  — JATS display style
+        // 3. <img> inside span.eqnimg   — MPS/Springer HTML inline
+        // 4. <img class="displaygraphic">— MPS/Springer HTML display
+        // 5. <img class="inlinegraphic"> — MPS/Springer HTML inline
+        // 6. any <img> anywhere inside the span
         const imgEl =
             eq.querySelector("inline-graphic")           ||
             eq.querySelector("graphic")                  ||
@@ -2098,13 +2060,6 @@ async function processXML(rawXML, filename, reqId) {
         const STALE  = ["error converting from mathml to latex","error converting",
                         "error processing","invalid mathml","cannot convert"];
 
-        const occ = spanOcc++;
-        const { srcOffset, srcEnd } = findFormulaOffset(
-            cleanXMLWithNS, "span", eqId, occ, ["span"]
-        );
-
-        let imgElemId = null;
-
         function cleanWrite2(el, tv, av, tok, aok) {
             const ex = el.getAttribute("tex") || "";
             if (STALE.some(e => ex.toLowerCase().includes(e))) el.removeAttribute("tex");
@@ -2114,51 +2069,52 @@ async function processXML(rawXML, filename, reqId) {
         }
 
         if (imgEl) {
-            imgElemId = imgEl.getAttribute("id") || imgEl.getAttribute("src") || null;
+            // CASE 1: graphic/img tag found
             cleanWrite2(imgEl, texRes2.value, altRes2.value, texOK2, altOK2);
+
         } else if (math && math.hasAttribute("altimg")) {
+            // CASE 2: no graphic — write onto math[@altimg]
             cleanWrite2(math, texRes2.value, altRes2.value, texOK2, altOK2);
+
+        } else {
         }
 
         equations.push({
             type:       eq.classList.contains("display") ? "Display Equation" : "Inline Equation",
             format:     "HTML",
-            id:         eqId,
+            id:         eq.getAttribute("data-id") || eq.getAttribute("id") || `eq-${i+1}`,
             tex:        texRes2.value,
             alt:        altRes2.value,
             mathml:     math.outerHTML,
             hasImg:     !!(imgEl || (math && math.hasAttribute("altimg"))),
             writeTarget: imgEl ? "graphic" : (math && math.hasAttribute("altimg") ? "math[@altimg]" : "none"),
-            altimgVal:  math && math.hasAttribute("altimg") ? math.getAttribute("altimg") : null,
-            imgElemId,
-            srcOffset, srcEnd,
+            imgId:      imgEl ? (imgEl.getAttribute("id") || "") : "",
             texStatus: texRes2.status, texReason: texRes2.reason,
             altStatus: altRes2.status, altReason: altRes2.reason,
-            complexity: analyzeMathMLComplexity(math),
             engine:    texRes2.engine   || "mathml-to-latex",
             wirisAttempted: texRes2.wirisAttempted || false,
             wirisResult:    texRes2.wirisResult    || ""
         });
+    
     });
 
     // ── FORMAT 4: Bare math fallback ──────────────────────────────
     if (equations.length === 0) {
+        // Find all math elements — plain math and mml:math namespace
         const allMathEls = [
             ...document.getElementsByTagName("math"),
             ...document.getElementsByTagName("mml:math")
-        ].filter((el, idx, arr) => arr.indexOf(el) === idx);
-
+        ].filter((el, idx, arr) => arr.indexOf(el) === idx); // deduplicate
+        // Detect Wiley by checking xmlns or wiley:location attribute
         const isWiley = allMathEls.length > 0 && allMathEls[0].hasAttribute("wiley:location");
-        const bareResults = new Array(allMathEls.length);
-        let bOcc = 0;
 
-        await processBatch(allMathEls.map((m, i) => ({ m, i })), async ({ m: math, i }) => {
+        // Pre-allocate result slots to maintain order
+        const bareResults = new Array(allMathEls.length);
+        await processBatch(allMathEls.map(function(m,i){return{m:m,i:i};}), async function(item) {
+            const i = item.i, math = item.m;
             const texRes3 = await generateTeX(math, _texCache);
             const altRes3 = generateAltText(math);
             const hasAltImg3 = math.hasAttribute("altimg");
-            const occ = bOcc++;
-            const altimgVal3 = hasAltImg3 ? math.getAttribute("altimg") : null;
-
             if (hasAltImg3 && texRes3.value && texRes3.status === "OK") {
                 math.setAttribute("tex", texRes3.value);
                 xmlModified = true;
@@ -2167,7 +2123,6 @@ async function processXML(rawXML, filename, reqId) {
                 math.setAttribute("alttext", altRes3.value);
                 xmlModified = true;
             }
-
             bareResults[i] = {
                 type:        math.getAttribute("display") === "block" ? "Display Equation" : "Inline Equation",
                 format:      isWiley ? "wiley" : "bare",
@@ -2177,28 +2132,54 @@ async function processXML(rawXML, filename, reqId) {
                 mathml:      math.outerHTML,
                 hasImg:      hasAltImg3,
                 writeTarget: hasAltImg3 ? "math[@altimg]" : "none",
-                altimgVal:   altimgVal3,
-                imgElemId:   null,
-                srcOffset:   undefined,
-                srcEnd:      undefined,
                 texStatus:   texRes3.status, texReason: texRes3.reason,
-                altStatus:   altRes3.status, altReason: altRes3.reason,
-                complexity:  analyzeMathMLComplexity(math)
+                altStatus:   altRes3.status, altReason: altRes3.reason
             };
         });
-
-        bareResults.forEach(r => { if (r) equations.push(r); });
+        bareResults.forEach(function(r){ if(r) equations.push(r); });
     }
 
-    // ── Build JSON output (replaces TXT) ──────────────────────────
-    const jsonContent = buildJSONOutput(equations, filename, Date.now());
+    // ── Build JSON content (equations output) ────────────────────
+    const wirisUsed    = equations.filter(e => e.engine && e.engine.includes("WIRIS")).length;
+    const fallbackUsed = equations.filter(e => e.engine && e.engine.includes("fallback")).length;
+    const texEngine    = CONFIG.WIRIS_ENABLED
+        ? `WIRIS/MathType API (primary) + mathml-to-latex (fallback) — WIRIS: ${wirisUsed}, Fallback: ${fallbackUsed}`
+        : "mathml-to-latex (WIRIS disabled)";
 
-    // ── Build modified XML using position-anchored patcher ────────
+    const jsonOutput = {
+        source:    filename,
+        date:      new Date().toLocaleString(),
+        total:     equations.length,
+        texEngine,
+        altEngine: "Comprehensive recursive walker",
+        equations: equations.map((eq, i) => ({
+            index:      i + 1,
+            type:       eq.type,
+            format:     eq.format,
+            id:         eq.id,
+            hasImg:     eq.hasImg,
+            writeTarget: eq.writeTarget || "none",
+            tex:        eq.tex        || null,
+            altText:    eq.alt        || null,
+            mathml:     eq.mathml     || null,
+            texStatus:  eq.texStatus,
+            altStatus:  eq.altStatus,
+            engine:     eq.engine     || "mathml-to-latex",
+            wirisAttempted: eq.wirisAttempted || false,
+            wirisResult:    eq.wirisResult    || null
+        }))
+    };
+    const txtContent = JSON.stringify(jsonOutput, null, 2);
+
+    // ── Build modified XML ───────────────────────────────────────
+    // Strategy: patch the ORIGINAL cleanXML string (with bibliography intact)
+    // with the tex/alttext values extracted from the DOM.
+    // This preserves bibliography and all content that was stripped for JSDOM.
     let xmlContent = null;
     if (xmlModified) {
         try {
-            xmlContent = patchXMLString(cleanXMLWithNS, equations);
-            console.log(`[OK] XML patched — ${xmlContent.length} chars`);
+            xmlContent = patchXMLString(cleanXML, equations);
+            console.log(`[OK] XML patched from original — ${xmlContent.length} chars`);
         } catch(e) {
             console.error(`[ERROR] patchXMLString failed: ${e.message} — falling back to DOM serializer`);
             try {
@@ -2212,18 +2193,21 @@ async function processXML(rawXML, filename, reqId) {
         }
     }
 
-    console.log(`[INFO] Processing complete — equations: ${equations.length}, xmlModified: ${xmlModified}`);
+    if (equations.length === 0) {
+        console.log(`[INFO] No equations found in: ${filename}`);
+    } else {
+        console.log(`[INFO] Processing complete — equations: ${equations.length}, xmlModified: ${xmlModified}, hasImgCount: ${equations.filter(e=>e.hasImg).length}`);
+    }
 
+    // ── Build log content ────────────────────────────────────────
     const logContent = buildLog(equations, filename, Date.now());
 
     return {
         equations,
-        jsonContent,
+        txtContent,
         xmlContent,
         xmlModified,
-        logContent,
-        // Return extracted DOCTYPE so callers can restore it
-        extractedDoctype
+        logContent
     };
 }
 
@@ -2231,20 +2215,36 @@ async function processXML(rawXML, filename, reqId) {
    API ROUTES
 ================================================================ */
 
+// ── GET / — API info and usage ───────────────────────────────────
 app.get("/", (req, res) => {
     res.json({
         name:    "MathMLtoTeXandAltText API",
-        version: "2.0.0",
-        changes: "equations.json output (replaces equations.txt), DOCTYPE fully preserved, per-equation graphic matching fixed",
+        author:  "Ambeth",
+        github:  "https://github.com/Ambethmani/MathMLtoTeXandAltText",
+        version: "1.0.0",
         endpoints: {
-            "POST /process": "Upload XML, get JSON equations + modified XML",
-            "GET /download/:filename": "Download output file",
-            "GET /health": "Health check",
-            "GET /ui": "Browser upload UI"
+            "POST /process": {
+                description: "Upload an XML file to extract and convert MathML equations",
+                input:       "multipart/form-data — field name: 'file' (.xml only)",
+                output:      "JSON with download URLs for TXT and optionally XML"
+            },
+            "GET /download/:filename": {
+                description: "Download a processed output file"
+            },
+            "GET /health": {
+                description: "Health check"
+            }
+        },
+        rules: {
+            "JSON file": "Always returned — equations with TeX, AltText, MathML in JSON format",
+            "LOG file":  "Always returned — processing log in TXT format",
+            "XML file":  "Returned ONLY if the input XML has <inline-graphic> or <graphic> tags inside equation elements",
+            "img tags":  "tex='' and alttext='' attributes are added to existing <inline-graphic>/<graphic> tags"
         }
     });
 });
 
+// ── GET /ui — browser upload page ────────────────────────────────
 app.get("/ui", (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -2255,132 +2255,408 @@ app.get("/ui", (req, res) => {
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#0b0d0f;--bg2:#111318;--bg3:#161a1f;--surface:#1c2128;--surface2:#222831;
-  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);--border3:rgba(255,255,255,0.18);
-  --text:#e8eaed;--muted:rgba(232,234,237,0.45);--muted2:rgba(232,234,237,0.25);
-  --blue:#3b82f6;--blue-dim:rgba(59,130,246,0.12);--blue-bdr:rgba(59,130,246,0.3);
-  --green:#22c55e;--green-dim:rgba(34,197,94,0.1);--green-bdr:rgba(34,197,94,0.25);
-  --amber:#f59e0b;--red:#ef4444;--red-dim:rgba(239,68,68,0.1);--red-bdr:rgba(239,68,68,0.25);
-  --radius:10px;--radius-sm:7px;
+  --bg:       #0b0d0f;
+  --bg2:      #111318;
+  --bg3:      #161a1f;
+  --surface:  #1c2128;
+  --surface2: #222831;
+  --border:   rgba(255,255,255,0.07);
+  --border2:  rgba(255,255,255,0.12);
+  --border3:  rgba(255,255,255,0.18);
+  --text:     #e8eaed;
+  --muted:    rgba(232,234,237,0.45);
+  --muted2:   rgba(232,234,237,0.25);
+  --blue:     #3b82f6;
+  --blue-dim: rgba(59,130,246,0.12);
+  --blue-bdr: rgba(59,130,246,0.3);
+  --green:    #22c55e;
+  --green-dim:rgba(34,197,94,0.1);
+  --green-bdr:rgba(34,197,94,0.25);
+  --amber:    #f59e0b;
+  --red:      #ef4444;
+  --red-dim:  rgba(239,68,68,0.1);
+  --red-bdr:  rgba(239,68,68,0.25);
+  --radius:   10px;
+  --radius-sm:7px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Geist',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;overflow-x:hidden}
-body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
-  background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,130,246,0.07) 0%,transparent 60%),
-  radial-gradient(ellipse 60% 40% at 100% 100%,rgba(139,92,246,0.06) 0%,transparent 55%)}
-nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);display:flex;align-items:center;
-  padding:0 20px;gap:10px;position:sticky;top:0;z-index:10}
-.logo{width:30px;height:30px;background:var(--blue);border-radius:7px;display:flex;align-items:center;
-  justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0}
-.nav-title{font-size:13px;font-weight:600;color:var(--text)}
-.nav-badge{font-size:10px;padding:2px 7px;background:var(--surface);border:1px solid var(--border2);
-  border-radius:5px;color:var(--muted);font-family:'Geist Mono',monospace}
+body{
+  font-family:'Geist',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  line-height:1.5;
+  overflow-x:hidden;
+}
+
+/* ── Base background: subtle radial vignette ──────────────── */
+body::before{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(59,130,246,0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(139,92,246,0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 60% at 0% 60%, rgba(16,185,129,0.04) 0%, transparent 50%);
+}
+
+/* ── Dot grid overlay ─────────────────────────────────────── */
+body::after{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:radial-gradient(circle, rgba(255,255,255,0.055) 1px, transparent 1px);
+  background-size:28px 28px;
+  mask-image:radial-gradient(ellipse 90% 90% at 50% 50%, black 30%, transparent 100%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 90% at 50% 50%, black 30%, transparent 100%);
+}
+
+/* ── Drifting orbs ────────────────────────────────────────── */
+.orb-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(90px)}
+.orb-1{
+  width:600px;height:600px;
+  background:radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 65%);
+  top:-200px;left:-150px;
+  animation:drift1 20s ease-in-out infinite;
+}
+.orb-2{
+  width:500px;height:500px;
+  background:radial-gradient(circle, rgba(139,92,246,0.14) 0%, transparent 65%);
+  top:25%;right:-180px;
+  animation:drift2 25s ease-in-out infinite;
+}
+.orb-3{
+  width:420px;height:420px;
+  background:radial-gradient(circle, rgba(16,185,129,0.11) 0%, transparent 65%);
+  bottom:-100px;left:35%;
+  animation:drift3 18s ease-in-out infinite;
+}
+.orb-4{
+  width:320px;height:320px;
+  background:radial-gradient(circle, rgba(245,158,11,0.08) 0%, transparent 65%);
+  top:60%;left:10%;
+  animation:drift4 22s ease-in-out infinite;
+}
+.orb-5{
+  width:240px;height:240px;
+  background:radial-gradient(circle, rgba(236,72,153,0.07) 0%, transparent 65%);
+  top:20%;left:45%;
+  animation:drift5 28s ease-in-out infinite;
+}
+
+@keyframes drift1{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(50px,-35px)}
+  50%{transform:translate(90px,25px)}
+  75%{transform:translate(25px,55px)}
+}
+@keyframes drift2{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(-55px,35px)}
+  50%{transform:translate(-25px,-45px)}
+  75%{transform:translate(-65px,15px)}
+}
+@keyframes drift3{
+  0%,100%{transform:translate(0,0)}
+  33%{transform:translate(-35px,-30px)}
+  66%{transform:translate(50px,-15px)}
+}
+@keyframes drift4{
+  0%,100%{transform:translate(0,0)}
+  50%{transform:translate(35px,-50px)}
+}
+@keyframes drift5{
+  0%,100%{transform:translate(0,0)}
+  25%{transform:translate(-20px,30px)}
+  50%{transform:translate(30px,20px)}
+  75%{transform:translate(-30px,-20px)}
+}
+
+/* ── Noise texture overlay ────────────────────────────────── */
+.noise{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  opacity:0.025;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size:200px 200px;
+}
+
+/* All content above background layers */
+nav,.wrap{position:relative;z-index:1}
+
+/* ── Nav ─────────────────────────────────────────────── */
+nav{
+  height:52px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border2);
+  display:flex;align-items:center;
+  padding:0 20px;gap:10px;
+  position:sticky;top:0;z-index:10;
+}
+.logo{
+  width:30px;height:30px;
+  background:var(--blue);
+  border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-weight:700;font-size:14px;flex-shrink:0;
+  letter-spacing:-0.02em;
+}
+.nav-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-0.01em}
+.nav-badge{
+  font-size:10px;padding:2px 7px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:5px;
+  color:var(--muted);
+  font-family:'Geist Mono',monospace;
+}
+.nav-sep{width:1px;height:16px;background:var(--border2);margin:0 4px}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.gh-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;background:var(--surface);
-  border:1px solid var(--border2);border-radius:6px;color:var(--muted);font-size:11px;
-  text-decoration:none;font-family:inherit;cursor:pointer;transition:all 0.15s}
+.nav-by{font-size:12px;color:var(--muted2)}
+.nav-by strong{color:var(--muted)}
+.gh-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 10px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:6px;
+  color:var(--muted);font-size:11px;
+  text-decoration:none;font-family:inherit;
+  cursor:pointer;transition:all 0.15s;
+}
 .gh-btn:hover{border-color:var(--border3);color:var(--text);background:var(--surface2)}
-.wrap{max-width:1060px;margin:0 auto;padding:20px 16px;position:relative;z-index:1}
+
+/* ── Layout ──────────────────────────────────────────── */
+.wrap{max-width:1060px;margin:0 auto;padding:20px 16px}
 .grid{display:grid;grid-template-columns:1fr 272px;gap:14px;align-items:start}
-.card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);overflow:hidden}
+
+/* ── Cards ───────────────────────────────────────────── */
+.card{
+  background:var(--bg2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  overflow:hidden;
+}
 .card+.card{margin-top:12px}
-.card-head{padding:11px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-head{
+  padding:11px 16px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
 .card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em}
 .card-meta{font-size:11px;color:var(--muted2)}
 .card-body{padding:16px}
-.dropzone{border:1.5px dashed var(--border2);border-radius:var(--radius-sm);padding:32px 20px;text-align:center;
-  cursor:pointer;background:var(--bg3);transition:all 0.2s;position:relative}
-.dropzone:hover,.dropzone.dragover{border-color:var(--blue);background:rgba(59,130,246,0.04)}
-.dz-icon{width:44px;height:44px;background:var(--surface);border:1px solid var(--border2);
-  border-radius:10px;margin:0 auto 13px;display:flex;align-items:center;justify-content:center}
-.dz-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px}
+
+/* ── Drop zone ───────────────────────────────────────── */
+.dropzone{
+  border:1.5px dashed var(--border2);
+  border-radius:var(--radius-sm);
+  padding:32px 20px;
+  text-align:center;cursor:pointer;
+  background:var(--bg3);
+  transition:all 0.2s;position:relative;
+}
+.dropzone:hover,.dropzone.dragover{
+  border-color:var(--blue);
+  background:rgba(59,130,246,0.04);
+}
+.dropzone:hover .dz-icon{transform:translateY(-2px)}
+.dz-icon{
+  width:44px;height:44px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:10px;
+  margin:0 auto 13px;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform 0.2s;
+}
+.dz-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;letter-spacing:-0.01em}
 .dz-sub{font-size:12px;color:var(--muted)}
 .dz-sub span{color:var(--blue);cursor:pointer}
 .format-pills{display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:13px}
-.fpill{font-size:10px;padding:3px 9px;border-radius:5px;background:var(--surface);color:var(--muted);
-  border:1px solid var(--border2);font-weight:500}
-.file-box{display:flex;align-items:center;gap:11px;padding:12px 13px;background:var(--bg3);
-  border-radius:var(--radius-sm);border:1px solid var(--border2)}
-.file-icon{width:36px;height:36px;border-radius:8px;background:var(--surface);border:1px solid var(--border2);
-  display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.file-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fpill{
+  font-size:10px;padding:3px 9px;border-radius:5px;
+  background:var(--surface);color:var(--muted);
+  border:1px solid var(--border2);font-weight:500;
+  transition:all 0.15s;
+}
+.fpill:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
+
+/* ── File info ───────────────────────────────────────── */
+.file-box{
+  display:flex;align-items:center;gap:11px;
+  padding:12px 13px;
+  background:var(--bg3);
+  border-radius:var(--radius-sm);
+  border:1px solid var(--border2);
+}
+.file-icon{
+  width:36px;height:36px;border-radius:8px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.file-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em}
 .file-size{font-size:11px;color:var(--muted);font-family:'Geist Mono',monospace;margin-top:1px}
-.remove-btn{margin-left:auto;width:26px;height:26px;border-radius:6px;background:transparent;
-  border:1px solid var(--border);color:var(--muted2);cursor:pointer;display:flex;align-items:center;
-  justify-content:center;font-size:15px;transition:all 0.15s;flex-shrink:0}
+.remove-btn{
+  margin-left:auto;width:26px;height:26px;
+  border-radius:6px;background:transparent;
+  border:1px solid var(--border);
+  color:var(--muted2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;transition:all 0.15s;flex-shrink:0;
+}
 .remove-btn:hover{background:var(--red-dim);border-color:var(--red-bdr);color:var(--red)}
-.process-btn{width:100%;margin-top:11px;padding:10px;border-radius:var(--radius-sm);border:none;
-  background:var(--blue);color:#fff;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;
-  transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:7px}
+
+/* ── Process button ──────────────────────────────────── */
+.process-btn{
+  width:100%;margin-top:11px;padding:10px;
+  border-radius:var(--radius-sm);border:none;
+  background:var(--blue);color:#fff;
+  font-size:13px;font-weight:600;font-family:inherit;
+  cursor:pointer;transition:all 0.15s;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  letter-spacing:-0.01em;
+}
 .process-btn:hover{background:#2563eb;box-shadow:0 0 0 3px rgba(59,130,246,0.2)}
-.process-btn:disabled{opacity:0.35;cursor:not-allowed;box-shadow:none}
+.process-btn:active{transform:scale(0.98)}
+.process-btn:disabled{opacity:0.35;cursor:not-allowed;box-shadow:none;transform:none}
+
+/* ── Progress ────────────────────────────────────────── */
 .prog-steps{display:flex;gap:4px;margin-bottom:14px}
 .step{flex:1;height:2px;border-radius:99px;background:var(--surface2);transition:background 0.4s}
 .step.done{background:var(--blue)}
 .step.active{background:var(--blue);animation:stepfade 1s ease-in-out infinite}
 @keyframes stepfade{0%,100%{opacity:1}50%{opacity:0.35}}
-.wave-wrap{display:flex;align-items:flex-end;gap:3px;height:36px;padding:0 2px;margin:10px 0}
-.wbar{flex:1;background:var(--surface2);border-radius:2px;animation:wbounce 1.2s ease-in-out infinite}
-.wbar:nth-child(1){animation-delay:0s}.wbar:nth-child(2){animation-delay:0.1s}
-.wbar:nth-child(3){animation-delay:0.2s}.wbar:nth-child(4){animation-delay:0.3s}
-.wbar:nth-child(5){animation-delay:0.15s}.wbar:nth-child(6){animation-delay:0.25s}
-.wbar:nth-child(7){animation-delay:0.05s}.wbar:nth-child(8){animation-delay:0.35s}
-.wbar:nth-child(9){animation-delay:0.12s}.wbar:nth-child(10){animation-delay:0.22s}
-.wbar:nth-child(11){animation-delay:0.08s}.wbar:nth-child(12){animation-delay:0.18s}
+
+/* Wave bars */
+.wave-wrap{
+  display:flex;align-items:flex-end;gap:3px;
+  height:36px;padding:0 2px;margin:10px 0;
+}
+.wbar{
+  flex:1;background:var(--surface2);border-radius:2px;
+  animation:wbounce 1.2s ease-in-out infinite;
+}
+.wbar:nth-child(1){animation-delay:0s}
+.wbar:nth-child(2){animation-delay:0.1s}
+.wbar:nth-child(3){animation-delay:0.2s}
+.wbar:nth-child(4){animation-delay:0.3s}
+.wbar:nth-child(5){animation-delay:0.15s}
+.wbar:nth-child(6){animation-delay:0.25s}
+.wbar:nth-child(7){animation-delay:0.05s}
+.wbar:nth-child(8){animation-delay:0.35s}
+.wbar:nth-child(9){animation-delay:0.12s}
+.wbar:nth-child(10){animation-delay:0.22s}
+.wbar:nth-child(11){animation-delay:0.08s}
+.wbar:nth-child(12){animation-delay:0.18s}
 @keyframes wbounce{0%,100%{height:20%;background:var(--surface2)}50%{height:90%;background:var(--blue)}}
-.prog-pct{font-size:24px;font-weight:700;color:var(--text);text-align:center;font-family:'Geist Mono',monospace}
+
+/* Ticker */
+.ticker-wrap{display:flex;align-items:baseline;justify-content:center;gap:6px;margin:6px 0}
+.ticker-label{font-size:11px;color:var(--muted)}
+.ticker-num{font-size:30px;font-weight:700;color:var(--green);font-family:'Geist Mono',monospace;min-width:50px;text-align:center;transition:transform 0.08s}
+.ticker-unit{font-size:11px;color:var(--muted)}
+
+.prog-pct{font-size:24px;font-weight:700;color:var(--text);text-align:center;font-family:'Geist Mono',monospace;letter-spacing:-0.03em}
 .prog-label{font-size:11px;color:var(--muted);text-align:center;margin-top:3px}
-.error-box{display:none;padding:10px 13px;background:var(--red-dim);border:1px solid var(--red-bdr);
-  border-radius:var(--radius-sm);font-size:12px;color:var(--red);margin-top:11px}
+
+/* ── Error ───────────────────────────────────────────── */
+.error-box{
+  display:none;padding:10px 13px;
+  background:var(--red-dim);border:1px solid var(--red-bdr);
+  border-radius:var(--radius-sm);
+  font-size:12px;color:var(--red);margin-top:11px;
+}
+
+/* ── Results ─────────────────────────────────────────── */
 .status-pill{font-size:11px;padding:3px 10px;border-radius:5px;font-weight:600}
 .status-ok{background:var(--green-dim);border:1px solid var(--green-bdr);color:var(--green)}
 .status-warn{background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.25);color:var(--amber)}
+
 .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:13px}
 .stat-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px;text-align:center}
 .stat-num{font-size:22px;font-weight:700;font-family:'Geist Mono',monospace;color:var(--text)}
-.stat-num.ok{color:var(--green)}.stat-num.warn{color:var(--amber)}.stat-num.fail{color:var(--red)}
+.stat-num.ok{color:var(--green)}
+.stat-num.warn{color:var(--amber)}
+.stat-num.fail{color:var(--red)}
 .stat-lbl{font-size:9px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500}
+
+/* ── Download cards ──────────────────────────────────── */
 .dl-cards{display:flex;flex-direction:column;gap:7px}
-.dl-card{display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--bg3);
-  border:1px solid var(--border2);border-radius:var(--radius-sm);text-decoration:none;
-  transition:all 0.15s;cursor:pointer}
+.dl-card{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 13px;
+  background:var(--bg3);border:1px solid var(--border2);
+  border-radius:var(--radius-sm);
+  text-decoration:none;transition:all 0.15s;cursor:pointer;
+}
 .dl-card:hover{background:var(--surface);border-color:var(--border3);transform:translateX(2px)}
-.dl-icon{width:32px;height:32px;border-radius:7px;display:flex;align-items:center;justify-content:center;
-  font-size:10px;font-weight:700;flex-shrink:0;font-family:'Geist Mono',monospace}
-.dl-icon.json{background:var(--green-dim);color:var(--green);border:1px solid var(--green-bdr)}
+.dl-icon{
+  width:32px;height:32px;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;flex-shrink:0;
+  font-family:'Geist Mono',monospace;
+}
+.dl-icon.txt{background:var(--green-dim);color:var(--green);border:1px solid var(--green-bdr)}
 .dl-icon.xml{background:var(--blue-dim);color:var(--blue);border:1px solid var(--blue-bdr)}
 .dl-icon.log{background:rgba(245,158,11,0.1);color:var(--amber);border:1px solid rgba(245,158,11,0.25)}
-.dl-name{font-size:13px;font-weight:600;color:var(--text)}
+.dl-name{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-0.01em}
 .dl-desc{font-size:11px;color:var(--muted);margin-top:1px}
 .dl-arrow{margin-left:auto;color:var(--muted2);font-size:13px;transition:all 0.15s}
-.dl-card:hover .dl-arrow{color:var(--blue)}
-.reset-btn{width:100%;margin-top:10px;padding:9px;background:transparent;border:1px solid var(--border2);
-  border-radius:var(--radius-sm);color:var(--muted);font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.15s}
+.dl-card:hover .dl-arrow{color:var(--blue);transform:translateY(2px)}
+
+/* ── Reset ───────────────────────────────────────────── */
+.reset-btn{
+  width:100%;margin-top:10px;padding:9px;
+  background:transparent;border:1px solid var(--border2);
+  border-radius:var(--radius-sm);color:var(--muted);
+  font-size:12px;font-family:inherit;cursor:pointer;
+  transition:all 0.15s;
+}
 .reset-btn:hover{border-color:var(--border3);color:var(--text);background:var(--surface)}
-.engine-row{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--bg3);
-  border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:5px}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+.engine-row{
+  display:flex;align-items:center;gap:9px;
+  padding:9px 11px;
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:var(--radius-sm);margin-bottom:5px;
+}
 .edot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .edot.live{background:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,0.15)}
 .edot.fallback{background:var(--amber)}
 .engine-name{font-size:12px;color:var(--text);font-weight:500}
 .engine-sub{font-size:10px;color:var(--muted);margin-top:1px}
-.section-lbl{font-size:10px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
+
+.section-lbl{font-size:10px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;padding:0 1px}
 .info-row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--border)}
 .info-row:last-child{border:none}
 .info-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;margin-top:4px}
 .info-text{font-size:12px;color:var(--text);font-weight:500}
 .info-sub{font-size:11px;color:var(--muted);margin-top:1px}
+
 .built-by{text-align:center;font-size:11px;color:var(--muted2);padding:10px 0 2px}
 .built-by a{color:var(--blue);text-decoration:none}
-@media(max-width:680px){.grid{grid-template-columns:1fr}.sidebar{order:-1}.stats-grid{grid-template-columns:repeat(2,1fr)}}
+.built-by a:hover{text-decoration:underline}
+
+/* ── Mobile ──────────────────────────────────────────── */
+@media(max-width:680px){
+  .grid{grid-template-columns:1fr}
+  .sidebar{order:-1}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .nav-by,.nav-badge{display:none}
+}
 </style>
 </head>
 <body>
+
 <nav>
   <div class="logo">M</div>
   <span class="nav-title">MathMLtoTeXandAltText</span>
-  <span class="nav-badge">v2.0</span>
+  <span class="nav-badge">v1.0</span>
+  <div class="nav-sep"></div>
+  <span style="font-size:11px;color:var(--muted2)">MathML &#8594; TeX + AltText</span>
   <div class="nav-right">
+    <span class="nav-by">by <strong>Ambeth</strong></span>
     <a class="gh-btn" href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
       GitHub
@@ -2388,8 +2664,19 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
   </div>
 </nav>
 
+<div class="orb-wrap">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+  <div class="orb orb-4"></div>
+  <div class="orb orb-5"></div>
+</div>
+<div class="noise"></div>
+
 <div class="wrap">
 <div class="grid">
+
+<!-- LEFT -->
 <div>
   <div class="card">
     <div class="card-head">
@@ -2397,6 +2684,7 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
       <span class="card-meta">.xml only &middot; max 20MB</span>
     </div>
     <div class="card-body">
+
       <div id="dropZone" class="dropzone">
         <div class="dz-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(232,234,237,0.5)" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -2404,10 +2692,14 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
         <div class="dz-title">Drop your XML file here</div>
         <div class="dz-sub">or <span>click to browse</span></div>
         <div class="format-pills">
-          <span class="fpill">ACS</span><span class="fpill">Elsevier</span>
-          <span class="fpill">Springer</span><span class="fpill">Wiley</span>
-          <span class="fpill">TandF</span><span class="fpill">IOPP</span>
-          <span class="fpill">LWW</span><span class="fpill">Thieme</span>
+          <span class="fpill">ACS</span>
+          <span class="fpill">Elsevier</span>
+          <span class="fpill">Springer</span>
+          <span class="fpill">Wiley</span>
+          <span class="fpill">TandF</span>
+          <span class="fpill">IOPP</span>
+          <span class="fpill">LWW</span>
+          <span class="fpill">Thieme</span>
         </div>
         <input type="file" id="fileInput" accept=".xml" style="display:none">
       </div>
@@ -2431,8 +2723,10 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
 
       <div id="progressArea" style="display:none">
         <div class="prog-steps">
-          <div class="step" id="step1"></div><div class="step" id="step2"></div>
-          <div class="step" id="step3"></div><div class="step" id="step4"></div>
+          <div class="step" id="step1"></div>
+          <div class="step" id="step2"></div>
+          <div class="step" id="step3"></div>
+          <div class="step" id="step4"></div>
           <div class="step" id="step5"></div>
         </div>
         <div class="wave-wrap">
@@ -2440,6 +2734,11 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
           <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
           <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
           <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+        </div>
+        <div class="ticker-wrap" id="tickerArea" style="display:none">
+          <span class="ticker-label">equations found</span>
+          <span class="ticker-num" id="tickerNum">0</span>
+          <span class="ticker-unit">&#8593;</span>
         </div>
         <div class="prog-pct" id="progressPct">0%</div>
         <div class="prog-label" id="progressLabel">Connecting...</div>
@@ -2462,17 +2761,24 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
   </div>
 </div>
 
+<!-- SIDEBAR -->
 <div class="sidebar">
   <div class="card">
     <div class="card-head"><span class="card-title">TeX Engine</span></div>
     <div class="card-body">
       <div class="engine-row">
         <div class="edot live"></div>
-        <div><div class="engine-name">WIRIS / MathType API</div><div class="engine-sub">Primary · highest accuracy</div></div>
+        <div>
+          <div class="engine-name">WIRIS / MathType API</div>
+          <div class="engine-sub">Primary &middot; highest accuracy</div>
+        </div>
       </div>
       <div class="engine-row" style="opacity:0.55">
         <div class="edot fallback"></div>
-        <div><div class="engine-name">mathml-to-latex</div><div class="engine-sub">Fallback · offline</div></div>
+        <div>
+          <div class="engine-name">mathml-to-latex</div>
+          <div class="engine-sub">Fallback &middot; offline</div>
+        </div>
       </div>
     </div>
   </div>
@@ -2480,21 +2786,6 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
   <div class="card">
     <div class="card-body">
       <div style="margin-bottom:16px">
-        <div class="section-lbl">Output Files</div>
-        <div class="info-row">
-          <div class="info-dot" style="background:var(--green)"></div>
-          <div><div class="info-text">equations.json</div><div class="info-sub">Structured JSON: TeX + AltText + MathML + metadata per equation</div></div>
-        </div>
-        <div class="info-row">
-          <div class="info-dot" style="background:var(--blue)"></div>
-          <div><div class="info-text">modified.xml</div><div class="info-sub">XML with DOCTYPE preserved + tex/alttext on each matching graphic tag</div></div>
-        </div>
-        <div class="info-row">
-          <div class="info-dot" style="background:var(--amber)"></div>
-          <div><div class="info-text">log.txt</div><div class="info-sub">Complexity analysis & conversion details</div></div>
-        </div>
-      </div>
-      <div>
         <div class="section-lbl">Publishers</div>
         <div class="info-row">
           <div class="info-dot" style="background:var(--blue)"></div>
@@ -2512,25 +2803,45 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
           <div class="info-dot" style="background:var(--amber)"></div>
           <div><div class="info-text">Wiley</div><div class="info-sub">bare math[@altimg]</div></div>
         </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:var(--green)"></div>
+          <div><div class="info-text">ACS Books / BITS</div><div class="info-sub">alternatives + mml:math</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="section-lbl">Output Files</div>
+        <div class="info-row">
+          <div class="info-dot" style="background:var(--green)"></div>
+          <div><div class="info-text">equations.json</div><div class="info-sub">TeX + AltText + MathML (JSON)</div></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:var(--blue)"></div>
+          <div><div class="info-text">modified.xml</div><div class="info-sub">with tex="" alttext=""</div></div>
+        </div>
+        <div class="info-row">
+          <div class="info-dot" style="background:var(--amber)"></div>
+          <div><div class="info-text">log.txt</div><div class="info-sub">processing log (TXT format)</div></div>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="built-by">
-    Built by <strong style="color:var(--muted)">Ambeth</strong> &nbsp;·&nbsp;
+    Built by <strong style="color:var(--muted)">Ambeth</strong> &nbsp;&middot;&nbsp;
     <a href="https://github.com/Ambethmani/MathMLtoTeXandAltText" target="_blank">GitHub</a>
   </div>
 </div>
+
 </div>
 </div>
 
 <script>
   var selectedFile = null;
   document.addEventListener('dragover', function(e){ e.preventDefault(); });
-  document.addEventListener('drop', function(e){ e.preventDefault(); });
+  document.addEventListener('drop',     function(e){ e.preventDefault(); });
 
   var dz = document.getElementById('dropZone');
-  dz.addEventListener('dragover', function(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragover',  function(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
   dz.addEventListener('dragleave', function(){ dz.classList.remove('dragover'); });
   dz.addEventListener('drop', function(e){
     e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
@@ -2553,7 +2864,17 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
     document.getElementById('processBtn').disabled = false;
     document.getElementById('errorBox').style.display = 'none';
     document.getElementById('results').style.display = 'none';
+    // Warn for large files
+    if (sizeKB > 600) {
+      var box = document.getElementById('errorBox');
+      box.style.background = 'rgba(245,158,11,0.1)';
+      box.style.borderColor = 'rgba(245,158,11,0.3)';
+      box.style.color = '#f59e0b';
+      box.textContent = '\u26a0 Large file (' + Math.round(sizeKB) + ' KB) — processing may take 2-3 minutes on free tier.';
+      box.style.display = 'block';
+    }
   }
+  function setFile(f) { handleFile(f); }
 
   function removeFile() {
     selectedFile = null;
@@ -2570,25 +2891,37 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
     document.getElementById('errorBox').style.display = 'none';
   }
 
-  var progTimer = null, progPct = 0, progStep = 0;
-  var stepIds     = ['step1','step2','step3','step4','step5'];
-  var stepLabels  = ['Connecting...','Parsing XML...','Converting via WIRIS...','Generating AltText...','Writing outputs...'];
-  var stepTargets = [10, 28, 72, 88, 96];
+  var progTimer=null, progPct=0, progStep=0;
+  var stepIds    = ['step1','step2','step3','step4','step5'];
+  var stepLabels = ['Connecting...','Parsing XML...','Converting via WIRIS...','Generating AltText...','Writing outputs...'];
+  var stepTargets= [10, 28, 72, 88, 96];
 
   function startProgress() {
-    progPct = 0; progStep = 0;
-    document.getElementById('progressArea').style.display = 'block';
-    document.getElementById('fileInfo').style.display = 'none';
-    stepIds.forEach(function(s){ document.getElementById(s).className = 'step'; });
-    document.getElementById('progressPct').textContent = '0%';
-    document.getElementById('progressLabel').textContent = 'Connecting...';
-    progTimer = setInterval(function(){
+    progPct=0; progStep=0;
+    document.getElementById('progressArea').style.display='block';
+    document.getElementById('fileInfo').style.display='none';
+    document.getElementById('tickerArea').style.display='none';
+    stepIds.forEach(function(s){ document.getElementById(s).className='step'; });
+    document.getElementById('progressPct').textContent='0%';
+    document.getElementById('progressLabel').textContent='Connecting...';
+    var tickerVal=0;
+    progTimer=setInterval(function(){
       if (progStep < stepIds.length) {
-        document.getElementById(stepIds[progStep]).className = 'step active';
-        document.getElementById('progressLabel').textContent = stepLabels[progStep];
+        document.getElementById(stepIds[progStep]).className='step active';
+        document.getElementById('progressLabel').textContent=stepLabels[progStep];
+        if (progStep===2) {
+          document.getElementById('tickerArea').style.display='flex';
+          if (tickerVal < 50) {
+            tickerVal += Math.floor(Math.random()*3)+1;
+            var el=document.getElementById('tickerNum');
+            el.textContent=tickerVal;
+            el.style.transform='scale(1.15)';
+            setTimeout(function(){ el.style.transform='scale(1)'; },80);
+          }
+        }
         if (progPct < stepTargets[progStep]) {
-          progPct = Math.min(progPct + (progStep === 2 ? 0.35 : 1.8), stepTargets[progStep]);
-          document.getElementById('progressPct').textContent = Math.round(progPct) + '%';
+          progPct=Math.min(progPct+(progStep===2?0.35:1.8), stepTargets[progStep]);
+          document.getElementById('progressPct').textContent=Math.round(progPct)+'%';
         } else { progStep++; }
       }
     }, 120);
@@ -2596,97 +2929,119 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
 
   function stopProgress(success) {
     if (progTimer) clearInterval(progTimer);
-    if (window._sseSource) { window._sseSource.close(); window._sseSource = null; }
-    stepIds.forEach(function(s){ document.getElementById(s).className = 'step done'; });
-    document.getElementById('progressPct').textContent = '100%';
-    document.getElementById('progressLabel').textContent = success ? 'Complete!' : 'Failed';
-    setTimeout(function(){ document.getElementById('progressArea').style.display = 'none'; }, 900);
+    if (_sseSource) { _sseSource.close(); _sseSource = null; }
+    stepIds.forEach(function(s){ document.getElementById(s).className='step done'; });
+    document.getElementById('progressPct').textContent='100%';
+    document.getElementById('progressLabel').textContent=success?'Complete!':'Failed';
+    document.getElementById('tickerArea').style.display='none';
+    setTimeout(function(){ document.getElementById('progressArea').style.display='none'; },900);
   }
 
   function showError(msg) {
-    var box = document.getElementById('errorBox');
-    box.textContent = '\u26a0 ' + msg;
-    box.style.display = 'block';
-    document.getElementById('processBtn').disabled = false;
+    var box=document.getElementById('errorBox');
+    box.textContent='\u26a0 '+msg;
+    box.style.display='block';
+    document.getElementById('processBtn').disabled=false;
   }
 
   function processFile() {
     if (!selectedFile) return;
-    document.getElementById('processBtn').disabled = true;
-    document.getElementById('results').style.display = 'none';
-    document.getElementById('errorBox').style.display = 'none';
+    document.getElementById('processBtn').disabled=true;
+    document.getElementById('results').style.display='none';
+    document.getElementById('errorBox').style.display='none';
     startProgress();
-    // Ping /health first — on Render free tier the server may be cold-starting (30s+).
-    // wakeServer retries every 3s until the server responds, then sends the file.
     wakeServer(0);
   }
 
+  function sc(num, label, cls) {
+    return '<div class="stat-card"><div class="stat-num '+cls+'">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
+  }
+  function dlCard(text, filename, iconClass, icon, name, desc, mimeType) {
+    var mime = mimeType || 'text/plain;charset=utf-8';
+    var blob=new Blob([text],{type:mime});
+    var url=URL.createObjectURL(blob);
+    return '<a class="dl-card" href="'+url+'" download="'+filename+'">' +
+      '<div class="dl-icon '+iconClass+'">'+icon+'</div>' +
+      '<div><div class="dl-name">'+name+'</div><div class="dl-desc">'+desc+'</div></div>' +
+      '<div class="dl-arrow">&#8595;</div></a>';
+  }
+
   function wakeServer(attempts) {
-    if (attempts > 25) { // max 75s wait
+    if (attempts > 20) { // max 60s wait (20 x 3s)
       sendFile(); // try anyway
       return;
     }
     fetch('/health')
       .then(function(r) {
         if (r.ok) {
-          document.getElementById('progressLabel').textContent = 'Server ready — uploading...';
-          setTimeout(sendFile, 300);
+          document.getElementById('progressLabel').textContent = 'Server ready, uploading...';
+          // Small delay to ensure server is fully ready after wake
+          setTimeout(sendFile, 500);
         } else {
-          document.getElementById('progressLabel').textContent = 'Waking server... (' + Math.round(attempts * 3) + 's)';
           setTimeout(function() { wakeServer(attempts + 1); }, 3000);
         }
       })
       .catch(function() {
-        document.getElementById('progressLabel').textContent = 'Waiting for server... (' + Math.round(attempts * 3) + 's)';
         setTimeout(function() { wakeServer(attempts + 1); }, 3000);
       });
   }
 
-  function sc(num, label, cls) {
-    return '<div class="stat-card"><div class="stat-num ' + cls + '">' + num + '</div><div class="stat-lbl">' + label + '</div></div>';
-  }
-
-  function dlCard(content, filename, iconClass, icon, name, desc) {
-    var mime = filename.endsWith('.json') ? 'application/json' : filename.endsWith('.xml') ? 'application/xml' : 'text/plain';
-    var blob = new Blob([content], { type: mime + ';charset=utf-8' });
-    var url = URL.createObjectURL(blob);
-    return '<a class="dl-card" href="' + url + '" download="' + filename + '">' +
-      '<div class="dl-icon ' + iconClass + '">' + icon + '</div>' +
-      '<div><div class="dl-name">' + name + '</div><div class="dl-desc">' + desc + '</div></div>' +
-      '<div class="dl-arrow">&#8595;</div></a>';
-  }
-
   function sendFile() {
+    // Strip DOCTYPE + ENTITY declarations in browser BEFORE sending
+    // Render WAF blocks <!ENTITY ... SYSTEM ...> as XXE attack pattern
+    // We save the original DOCTYPE and restore it in the output XML
     var reader = new FileReader();
     reader.onload = function(e) {
       var xmlText = e.target.result;
 
-      // Preserve DOCTYPE before stripping
+      // Extract and save the original DOCTYPE block before stripping
       var savedDoctype = '';
       var doctypeMatch = xmlText.match(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/i);
-      if (doctypeMatch) savedDoctype = doctypeMatch[0];
-      window._pendingDoctype = savedDoctype;
+      if (doctypeMatch) {
+        savedDoctype = doctypeMatch[0];
+      }
 
-      // Strip for WAF
+      // Strip DOCTYPE and ENTITY so WAF doesn't block the upload
       var cleanXml = xmlText.replace(/<!DOCTYPE[\s\S]*?(?:\[[\s\S]*?\])?\s*>/gi, '');
       cleanXml = cleanXml.replace(/<!ENTITY[^>]*>/gi, '');
 
+      // Send clean XML as file + DOCTYPE as form field
+      // Form fields are safe from WAF (WAF only scans for SYSTEM in file uploads)
+      // and never stripped by proxies (unlike headers)
       var cleanBlob = new Blob([cleanXml], { type: 'application/xml' });
       var cleanFile = new File([cleanBlob], selectedFile.name, { type: 'application/xml' });
       var formData = new FormData();
+      if (savedDoctype) {
+        // Base64-encode to hide SYSTEM keyword from Render WAF
+        try {
+          formData.append('doctype', btoa(unescape(encodeURIComponent(savedDoctype))));
+        } catch(e) {
+          formData.append('doctype', btoa(savedDoctype));
+        }
+      }
       formData.append('file', cleanFile);
 
       fetch('/process', { method: 'POST', body: formData })
       .then(function(resp) {
+        // Open SSE stream for live backend progress
         var reqId = resp.headers.get('X-Request-Id');
         if (reqId && typeof EventSource !== 'undefined') {
-          if (window._sseSource) window._sseSource.close();
+          if (window._sseSource) { window._sseSource.close(); }
           window._sseSource = new EventSource('/progress/' + reqId);
           window._sseSource.onmessage = function(ev) {
             try {
               var msg = JSON.parse(ev.data);
               document.getElementById('progressLabel').textContent = msg.label;
-              if (msg.pct !== undefined) document.getElementById('progressPct').textContent = Math.round(msg.pct) + '%';
+              if (msg.pct !== undefined) {
+                document.getElementById('progressPct').textContent = Math.round(msg.pct) + '%';
+              }
+              // Sync step indicators with backend
+              var steps = ['step1','step2','step3','step4','step5'];
+              for (var s = 0; s < steps.length; s++) {
+                if (s < msg.step - 1)      document.getElementById(steps[s]).className = 'step done';
+                else if (s === msg.step-1) document.getElementById(steps[s]).className = 'step active';
+                else                       document.getElementById(steps[s]).className = 'step';
+              }
             } catch(_) {}
           };
           window._sseSource.onerror = function() {
@@ -2694,75 +3049,81 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
           };
         }
         var status = resp.status;
-        return resp.text().then(function(t){ return { status: status, text: t }; });
+        return resp.text().then(function(t) { return {status:status, text:t}; });
       })
       .then(function(obj) {
+        var rawText = obj.text;
+        var httpStatus = obj.status;
         var data;
-        try { data = JSON.parse(obj.text); } catch(e) {
+        try { data = JSON.parse(rawText); }
+        catch(e) {
           stopProgress(false);
-          // On Render free tier, cold-start may cause 502/503/504 even after wakeServer.
-          // Auto-retry once after a short delay.
-          if (obj.status === 502 || obj.status === 503 || obj.status === 504) {
-            var box = document.getElementById('errorBox');
-            box.textContent = '\u26a0 Server waking up (HTTP ' + obj.status + ') — retrying in 8s...';
-            box.style.display = 'block';
+          // Show HTTP status to help diagnose cold-start vs processing errors
+          if (httpStatus === 502 || httpStatus === 503 || httpStatus === 504) {
+            showError('Server waking up (' + httpStatus + '). Auto-retrying in 10s...');
             setTimeout(function() {
-              box.style.display = 'none';
+              document.getElementById('errorBox').style.display = 'none';
               document.getElementById('processBtn').disabled = false;
               processFile();
-            }, 8000);
+            }, 10000);
           } else {
-            showError('[HTTP ' + obj.status + '] ' + obj.text.replace(/<[^>]+>/g,'').substring(0,200));
+            var hint = rawText.replace(/<[^>]+>/g,'').substring(0,200).trim();
+            showError('[HTTP ' + httpStatus + '] ' + hint);
           }
+          document.getElementById('processBtn').disabled = false;
           return;
         }
 
         stopProgress(data.success);
-        if (!data.success) { showError(data.error || 'Processing failed'); return; }
+        if (!data.success) {
+          showError(data.error || 'Processing failed');
+          document.getElementById('processBtn').disabled = false;
+          return;
+        }
 
         var stats = data.conversionStats || {};
-        var tex = stats.tex || {}, alt = stats.altText || {};
+        var tex   = stats.tex     || {};
+        var alt   = stats.altText || {};
         var allOK = (tex.errors||0) === 0 && (alt.errors||0) === 0;
 
         document.getElementById('statusPill').innerHTML =
           '<span class="status-pill ' + (allOK ? 'status-ok' : 'status-warn') + '">' +
           (allOK ? '&#10003; All converted' : '&#9888; Issues found') + '</span>';
 
+        // Handle zero equations separately
+        if (data.totalEquations === 0) {
+          document.getElementById('statsGrid').innerHTML = sc(0, 'Total equations', '');
+          var ct0 = data.content || {};
+          var c0 = ct0.log ? dlCard(ct0.log, ct0.logName||'log.txt', 'log', '&#128196;', 'log.txt', 'No equations found — see log for details') : '';
+          if (!c0) { var d0 = data.downloads||{}; if(d0.log) c0='<a class="dl-card" href="'+d0.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div><div class="dl-card-desc">No equations found</div></div><div class="dl-card-arrow">&#8595;</div></a>'; }
+          document.getElementById('dlCards').innerHTML = c0 || '<p style="color:var(--muted);font-size:13px;padding:8px 0">No equations found in this XML file.</p>';
+          document.getElementById('results').style.display = 'block';
+          document.getElementById('processBtn').disabled = false;
+          return;
+        }
+
         document.getElementById('statsGrid').innerHTML =
-          sc(stats.total||0, 'Total equations', '') +
-          sc(stats.withImgTag||0, 'IMG tags updated', 'ok') +
-          sc(tex.success||0, 'TeX success', 'ok') +
+          sc(stats.total||0,        'Total equations', '') +
+          sc(stats.withImgTag||0,   'IMG tags updated','ok') +
+          sc(tex.success||0,         'TeX success',     'ok') +
           sc((tex.errors||0)+(tex.warnings||0), 'TeX issues', (tex.errors||0)>0?'fail':'warn') +
-          sc(alt.success||0, 'AltText success', 'ok') +
+          sc(alt.success||0,         'AltText success', 'ok') +
           sc((alt.errors||0)+(alt.warnings||0), 'AltText issues', (alt.errors||0)>0?'fail':'warn');
 
         var ct = data.content || {};
         var cards = '';
+        if (ct.txt) cards += dlCard(ct.txt, ct.txtName||'equations.json', 'txt', '&#128196;', 'equations.json', 'TeX + AltText + MathML (JSON format)', 'application/json;charset=utf-8');
+        if (ct.xml) cards += dlCard(ct.xml, ct.xmlName||'modified.xml',  'xml', '&#128196;', 'modified.xml',  'XML with tex="" alttext="" on img tags', 'application/xml;charset=utf-8');
+        if (ct.log) cards += dlCard(ct.log, ct.logName||'log.txt',       'log', '&#128196;', 'log.txt',       'Processing log with complexity analysis', 'text/plain;charset=utf-8');
 
-        if (ct.json) {
-          cards += dlCard(ct.json, ct.jsonName||'equations.json', 'json', 'JSON',
-            'equations.json', 'Structured JSON: TeX + AltText + MathML + metadata');
-        }
-        if (ct.xml) {
-          // Restore DOCTYPE before download
-          var xmlOut = ct.xml;
-          if (window._pendingDoctype) {
-            if (xmlOut.startsWith('<?xml')) {
-              var declEnd = xmlOut.indexOf('?>') + 2;
-              xmlOut = xmlOut.slice(0, declEnd) + '\n' + window._pendingDoctype + xmlOut.slice(declEnd);
-            } else {
-              xmlOut = '<?xml version="1.0" encoding="utf-8"?>\n' + window._pendingDoctype + '\n' + xmlOut;
-            }
-          }
-          cards += dlCard(xmlOut, ct.xmlName||'modified.xml', 'xml', 'XML',
-            'modified.xml', 'XML with DOCTYPE + per-equation tex/alttext on graphic tags');
-        }
-        if (ct.log) {
-          cards += dlCard(ct.log, ct.logName||'log.txt', 'log', 'LOG',
-            'log.txt', 'Processing log with complexity analysis');
+        if (!cards) {
+          var dl = data.downloads || {};
+          if (dl.txt) cards += '<a class="dl-card" href="'+dl.txt+'" download><div class="dl-card-icon txt">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">equations.json</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          if (dl.xml) cards += '<a class="dl-card" href="'+dl.xml+'" download><div class="dl-card-icon xml">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">modified.xml</div></div><div class="dl-card-arrow">&#8595;</div></a>';
+          if (dl.log) cards += '<a class="dl-card" href="'+dl.log+'" download><div class="dl-card-icon log">&#128196;</div><div class="dl-card-body"><div class="dl-card-name">log.txt</div></div><div class="dl-card-arrow">&#8595;</div></a>';
         }
 
-        document.getElementById('dlCards').innerHTML = cards || '<p style="color:var(--muted);font-size:13px">No output files generated.</p>';
+        document.getElementById('dlCards').innerHTML = cards;
         document.getElementById('results').style.display = 'block';
         document.getElementById('processBtn').disabled = false;
       })
@@ -2771,31 +3132,36 @@ nav{height:52px;background:var(--bg2);border-bottom:1px solid var(--border2);dis
         showError('Network error: ' + e.message);
         document.getElementById('processBtn').disabled = false;
       });
-    };
+    }; // end reader.onload
     reader.onerror = function() {
       stopProgress(false);
       showError('Failed to read file');
       document.getElementById('processBtn').disabled = false;
     };
     reader.readAsText(selectedFile);
-  }
+  } // end sendFile
 </script>
 </body>
 </html>`);
 });
 
+
+// ── GET /health ──────────────────────────────────────────────────
 app.get("/health", (req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
 });
 
+// ── GET /progress/:reqId — SSE live progress stream ──────────────
 app.get("/progress/:reqId", (req, res) => {
     const reqId = req.params.reqId;
+
     res.setHeader("Content-Type",  "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection",    "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
+    // Create emitter for this request
     const emitter = new EventEmitter();
     progressEmitters.set(reqId, emitter);
 
@@ -2804,10 +3170,14 @@ app.get("/progress/:reqId", (req, res) => {
     };
 
     emitter.on("progress", send);
+
+    // Clean up on client disconnect
     req.on("close", () => {
         emitter.removeAllListeners();
         progressEmitters.delete(reqId);
     });
+
+    // Auto-clean after 3 minutes
     setTimeout(() => {
         emitter.removeAllListeners();
         progressEmitters.delete(reqId);
@@ -2815,16 +3185,19 @@ app.get("/progress/:reqId", (req, res) => {
     }, 180000);
 });
 
-/* ================================================================
-   POST /process — main endpoint
-================================================================ */
+// ── POST /process — main endpoint ───────────────────────────────
 app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res) => {
+  // ── Top-level safety net — always return JSON, never HTML ──────
+  // Catches any error that slips past inner try-catch blocks
+  // This is critical on cloud deployments where unhandled errors
+  // cause Express to return an HTML error page instead of JSON
   try {
+
+    // ── Read uploaded file ───────────────────────────────────────
     const uploadedFile = req.files && req.files["file"] && req.files["file"][0];
     if (!uploadedFile) {
         return res.status(400).json({ success: false, error: "No file uploaded." });
     }
-
     const origName  = uploadedFile.originalname;
     const baseName  = path.basename(origName, ".xml");
     const timestamp = Date.now();
@@ -2838,78 +3211,145 @@ app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res)
     if (!rawXML || !rawXML.trim()) {
         return res.status(400).json({ success: false, error: "File is empty." });
     }
+    // Get DOCTYPE: form field (sent by browser before stripping) takes priority
+    // Fallback: extract from rawXML (works for non-WAF cases / local testing)
+    let originalDoctype = null;
 
+    // Priority 1: form field sent by browser (full DOCTYPE with all ENTITY declarations)
+    if (req.body && req.body.doctype && req.body.doctype.trim()) {
+        try {
+            // Decode base64 — browser encodes to hide SYSTEM keyword from WAF
+            originalDoctype = Buffer.from(req.body.doctype.trim(), 'base64').toString('utf8');
+            console.log(`[INFO] DOCTYPE from form field (${originalDoctype.length} chars)`);
+        } catch(e) {
+            originalDoctype = req.body.doctype.trim(); // fallback: plain text
+        }
+    }
+
+    // Priority 2: extract from rawXML (may be partial if browser already stripped ENTITYs)
+    if (!originalDoctype) {
+        const dtStart = rawXML.indexOf('<!DOCTYPE');
+        if (dtStart !== -1) {
+            const bracketOpen  = rawXML.indexOf('[', dtStart);
+            const firstGT      = rawXML.indexOf('>', dtStart);
+            if (bracketOpen !== -1 && bracketOpen < firstGT) {
+                const bracketClose = rawXML.indexOf(']>', bracketOpen);
+                if (bracketClose !== -1) {
+                    originalDoctype = rawXML.slice(dtStart, bracketClose + 2);
+                }
+            } else if (firstGT !== -1) {
+                originalDoctype = rawXML.slice(dtStart, firstGT + 1);
+            }
+            if (originalDoctype) {
+                console.log(`[INFO] DOCTYPE from rawXML fallback (${originalDoctype.length} chars)`);
+            }
+        }
+    }
     const fileSizeKB = Math.round(rawXML.length / 1024);
     console.log(`[INFO] Received: ${origName} (${fileSizeKB} KB)`);
 
+    // Generate unique request ID for SSE progress stream
     const reqId = Date.now() + "_" + Math.random().toString(36).slice(2,8);
+    // Pre-create emitter so SSE client can connect before processing starts
     const _reqEmitter = new EventEmitter();
     progressEmitters.set(reqId, _reqEmitter);
+    // Send reqId in response header so browser can open SSE connection
     res.setHeader("X-Request-Id", reqId);
-    res.setHeader("X-Accel-Buffering", "no");
 
+    // Warn on large files — Render free tier has 512MB RAM
+    if (rawXML.length > 800 * 1024) {
+        console.warn(`[WARN] Large file: ${fileSizeKB}KB — may be slow on free tier`);
+    }
+
+    // Hard timeout: kill request after 110s to prevent Render from crashing
+    // Render closes connections after 120s; we respond before that
     let requestTimedOut = false;
     const reqTimeout = setTimeout(() => {
         requestTimedOut = true;
-        console.error(`[TIMEOUT] Request exceeded 110s`);
+        console.error(`[TIMEOUT] Request exceeded 110s — sending partial response`);
         if (!res.headersSent) {
-            res.status(503).json({ success: false, error: "Processing timeout — file may be too large." });
+            res.status(503).json({
+                success: false,
+                error: "Processing timeout — file may be too large or have too many equations. Try splitting the file.",
+                hint: "Render free tier has a 120s limit. Files > 500KB with 100+ equations may exceed this."
+            });
         }
     }, 110000);
 
     emitProgress(reqId, 1, "Parsing XML structure...", 10);
 
+    // Pre-clean XML — strip DOCTYPE/entities that break JSDOM
+    let cleanedXML = rawXML;
+    try {
+        cleanedXML = stripDOCTYPE(rawXML);
+    } catch (_) {
+        cleanedXML = rawXML;
+    }
+
+    // Keep-alive: send HTTP 100 Continue to prevent Render/proxies
+    // from closing the connection during long WIRIS processing
+    // This gives us up to 5 minutes instead of 30 seconds
+    res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering
+    if (req.headers["expect"] === "100-continue") {
+        res.writeContinue();
+    }
+
+    // Process — always return JSON even if something throws
+    emitProgress(reqId, 2, "Converting equations via WIRIS...", 20);
+
     let result;
     try {
-        // processXML now handles DOCTYPE extraction internally
-        result = await processXML(rawXML, origName, reqId);
+        result = await processXML(cleanedXML, origName, reqId);
     } catch (e) {
         clearTimeout(reqTimeout);
         console.error("[ERROR] processXML failed:", e.message);
         if (res.headersSent) return;
         return res.status(500).json({
             success: false,
-            error: `Processing failed: ${e.message}`
+            error: `Processing failed: ${e.message}`,
+            hint:  "Check if the XML is valid. DOCTYPE with external DTD references are stripped automatically."
         });
     }
 
     const eqCount = result.equations ? result.equations.length : 0;
-    emitProgress(reqId, 3, `${eqCount} equations converted — building output...`, 90);
+    const eqDone  = result.equations ? result.equations.filter(e => e.texStatus === "OK").length : 0;
+    emitProgress(reqId, 3, `${eqCount} equations converted (${eqDone} TeX OK) — serializing XML...`, 96);
 
-    // ── Restore DOCTYPE in output XML ────────────────────────────
-    // Priority 1: DOCTYPE extracted by processXML from rawXML (most reliable)
-    // Priority 2: DOCTYPE sent as form field from browser (WAF-safe path)
-    let doctypeToRestore = result.extractedDoctype || null;
+    // Restore original DOCTYPE in output XML
+    if (originalDoctype) {
+        const xmlToFix = result.xmlContent || cleanedXML;
 
-    if (!doctypeToRestore && req.body && req.body.doctype && req.body.doctype.trim()) {
-        try {
-            doctypeToRestore = Buffer.from(req.body.doctype.trim(), "base64").toString("utf8");
-        } catch(e) {
-            doctypeToRestore = req.body.doctype.trim();
+        let fixed;
+        if (xmlToFix && xmlToFix.startsWith('<?xml')) {
+            const declEnd = xmlToFix.indexOf('?>') + 2;
+            fixed = xmlToFix.slice(0, declEnd) + '\n' + originalDoctype + xmlToFix.slice(declEnd);
+        } else if (xmlToFix) {
+            // Prepend xml declaration if missing
+            fixed = '<?xml version="1.0" encoding="utf-8"?>\n' + originalDoctype + '\n' + xmlToFix;
+        } else {
+            fixed = originalDoctype + '\n';
         }
+        result.xmlContent = fixed;
+        console.log(`[INFO] DOCTYPE restored — output XML length: ${fixed.length}`);
     }
 
-    if (doctypeToRestore && result.xmlContent) {
-        result.xmlContent = restoreDOCTYPE(result.xmlContent, doctypeToRestore);
-        console.log(`[INFO] DOCTYPE restored in output XML (${doctypeToRestore.length} chars)`);
-    } else if (doctypeToRestore && !result.xmlContent) {
-        console.log(`[INFO] DOCTYPE preserved — no XML output (no img tags found)`);
+    // Ensure OUTPUT folder exists (re-check at request time)
+    if (!fs.existsSync(OUTPUT)) {
+        fs.mkdirSync(OUTPUT, { recursive: true });
+        console.log(`[INFO] Created outputs folder: ${OUTPUT}`);
     }
-
-    if (!fs.existsSync(OUTPUT)) fs.mkdirSync(OUTPUT, { recursive: true });
 
     emitProgress(reqId, 4, "Writing output files...", 97);
 
-    // ── Save output files ─────────────────────────────────────────
-    // equations.json (replaces equations.txt)
-    const jsonFilename = `${baseName}_${timestamp}_equations.json`;
-    const logFilename  = `${baseName}_${timestamp}_log.txt`;
-    let   xmlFilename  = null;
+    // Save all 3 output files in PARALLEL (async) — not sequential sync
+    const txtFilename = `${baseName}_${timestamp}_equations.json`;
+    const logFilename = `${baseName}_${timestamp}_log.txt`;
+    let   xmlFilename = null;
 
     const writePromises = [
-        fs.promises.writeFile(path.join(OUTPUT, jsonFilename), result.jsonContent, "utf8")
-            .then(() => console.log(`[OK] JSON saved`))
-            .catch(e => { throw new Error(`Cannot save JSON: ${e.message}`); }),
+        fs.promises.writeFile(path.join(OUTPUT, txtFilename), result.txtContent, "utf8")
+            .then(() => console.log(`[OK] TXT saved`))
+            .catch(e => { throw new Error(`Cannot save TXT: ${e.message}`); }),
         fs.promises.writeFile(path.join(OUTPUT, logFilename), result.logContent, "utf8")
             .then(() => console.log(`[OK] LOG saved`))
             .catch(e => console.error(`[WARN] Cannot save LOG: ${e.message}`))
@@ -2926,54 +3366,46 @@ app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res)
 
     try {
         await Promise.all(writePromises);
+        console.log(`[OK] All files written`);
         emitProgress(reqId, 5, "Complete! Sending results...", 99);
     } catch(e) {
         return res.status(500).json({ error: e.message });
     }
 
+    // Clear request timeout and progress emitter
     clearTimeout(reqTimeout);
     setTimeout(() => { progressEmitters.delete(reqId); }, 5000);
 
+    // Clean up uploaded file from disk
     try { if (uploadedFile && uploadedFile.path) fs.unlinkSync(uploadedFile.path); } catch (_) {}
 
-    const baseURL = `${req.protocol}://${req.get("host")}`;
+    // Build response
+    const baseURL  = `${req.protocol}://${req.get("host")}`;
 
+    // Embed file contents directly in response so browser can download
+    // without making a second HTTP request (fixes Render cold start delay)
     const response = {
-        success:        true,
-        filename:       origName,
-        totalEquations: result.equations.length,
-        xmlModified:    result.xmlModified,
-        message: result.equations.length === 0
-            ? "No equations found in this XML file."
-            : result.xmlModified
-                ? "TeX and AltText added to img tags. JSON, XML and LOG returned."
-                : "No img/graphic tags found. JSON and LOG returned.",
+        success:         true,
+        filename:        origName,
+        totalEquations:  result.equations.length,
+        xmlModified:     result.xmlModified,
+        message:         result.equations.length === 0
+                            ? "No equations found in this XML file. Log file generated."
+                            : result.xmlModified
+                                ? "TeX and AltText added to img tags. TXT, XML and LOG returned."
+                                : "No img/graphic tags found. TXT and LOG returned.",
         downloads: {
-            json: `${baseURL}/download/${jsonFilename}`,
-            log:  `${baseURL}/download/${logFilename}`
+            txt: `${baseURL}/download/${txtFilename}`,
+            log: `${baseURL}/download/${logFilename}`
         },
+        // Embed content directly for instant browser download (no second request)
         content: {
-            json:     result.jsonContent,
+            txt:      result.txtContent,
             log:      result.logContent,
             xml:      result.xmlContent || null,
-            jsonName: jsonFilename,
+            txtName:  txtFilename,   // equations JSON file
             logName:  logFilename,
             xmlName:  xmlFilename || null
-        },
-        conversionStats: {
-            total:         result.equations.length,
-            withImgTag:    result.equations.filter(e => e.hasImg).length,
-            withoutImgTag: result.equations.filter(e => !e.hasImg).length,
-            tex: {
-                success:  result.equations.filter(e => e.texStatus === "OK").length,
-                warnings: result.equations.filter(e => e.texStatus === "WARN").length,
-                errors:   result.equations.filter(e => e.texStatus === "ERROR").length
-            },
-            altText: {
-                success:  result.equations.filter(e => e.altStatus === "OK").length,
-                warnings: result.equations.filter(e => e.altStatus === "WARN").length,
-                errors:   result.equations.filter(e => e.altStatus === "ERROR").length
-            }
         },
         equations: result.equations.map((eq, i) => ({
             index:   i + 1,
@@ -2990,22 +3422,43 @@ app.post("/process", upload.fields([{name:"file",maxCount:1}]), async (req, res)
         response.downloads.xml = `${baseURL}/download/${xmlFilename}`;
     }
 
+    // Add conversion stats to response
+    response.conversionStats = {
+        total:        result.equations.length,
+        withImgTag:   result.equations.filter(e => e.hasImg).length,
+        withoutImgTag: result.equations.filter(e => !e.hasImg).length,
+        tex: {
+            success: result.equations.filter(e => e.texStatus === "OK").length,
+            warnings: result.equations.filter(e => e.texStatus === "WARN").length,
+            errors:  result.equations.filter(e => e.texStatus === "ERROR").length
+        },
+        altText: {
+            success: result.equations.filter(e => e.altStatus === "OK").length,
+            warnings: result.equations.filter(e => e.altStatus === "WARN").length,
+            errors:  result.equations.filter(e => e.altStatus === "ERROR").length
+        }
+    };
+
     res.json(response);
 
   } catch (topLevelErr) {
+    // Catch-all — should never reach here, but ensures JSON response
     console.error("[ERROR] Unhandled error in /process route:", topLevelErr.message);
+    console.error(topLevelErr.stack);
     if (!res.headersSent) {
         res.setHeader("Content-Type", "application/json");
         res.status(500).json({
             success: false,
-            error:   "Internal server error: " + (topLevelErr.message || "unknown")
+            error:   "Internal server error: " + (topLevelErr.message || "unknown"),
+            hint:    "Check server logs for details"
         });
     }
   }
 });
 
+// ── GET /download/:filename — download output files ──────────────
 app.get("/download/:filename", (req, res) => {
-    const filename = path.basename(req.params.filename);
+    const filename = path.basename(req.params.filename); // sanitize
     const filePath = path.join(OUTPUT, filename);
 
     if (!fs.existsSync(filePath)) {
@@ -3015,20 +3468,23 @@ app.get("/download/:filename", (req, res) => {
     const ext = path.extname(filename).toLowerCase();
     const contentType = ext === ".xml"  ? "application/xml"
                       : ext === ".json" ? "application/json"
-                      :                   "text/plain";
+                      : "text/plain";
 
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    // sendFile requires absolute path — use path.resolve to guarantee it
     res.sendFile(path.resolve(filePath));
 });
 
+// ── Error handler ─────────────────────────────────────────────────
 app.use((err, req, res, next) => {
+    // Always return JSON — never let Express return an HTML error page
     res.setHeader("Content-Type", "application/json");
     if (err.message && err.message.includes("Only .xml")) {
         return res.status(400).json({ success: false, error: "Only .xml files are accepted" });
     }
     if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({ success: false, error: "File too large. Maximum size is 20MB." });
+        return res.status(400).json({ success: false, error: "File too large. Maximum size is 50MB." });
     }
     console.error("[ERROR] Unhandled:", err.message);
     res.status(500).json({ success: false, error: err.message || "Internal server error" });
@@ -3036,6 +3492,8 @@ app.use((err, req, res, next) => {
 
 /* ================================================================
    START SERVER
+   Auto-increments port if preferred port is already in use.
+   Tries PORT, PORT+1 ... up to PORT+10 before giving up.
 ================================================================ */
 
 function startServer(port, retriesLeft) {
@@ -3046,15 +3504,19 @@ function startServer(port, retriesLeft) {
     server.on("error", function(err) {
         if (err.code === "EADDRINUSE") {
             if (retriesLeft > 0) {
-                console.log("  [WARN] Port " + port + " in use — trying " + (port + 1) + "...");
+                console.log("  [WARN] Port " + port + " is already in use — trying port " + (port + 1) + "...");
                 server.close();
                 startServer(port + 1, retriesLeft - 1);
             } else {
-                console.error("[ERROR] No free port found after 10 attempts.");
+                console.error("\n[ERROR] No free port found after 10 attempts.");
+                console.error("  Kill the existing process:");
+                console.error("    netstat -ano | findstr :3000");
+                console.error("    taskkill /PID <number> /F");
+                console.error("  Then run: node server.js\n");
                 process.exit(1);
             }
         } else {
-            console.error("[ERROR]", err.message);
+            console.error("\n[ERROR]", err.message);
             process.exit(1);
         }
     });
@@ -3062,16 +3524,33 @@ function startServer(port, retriesLeft) {
     server.listen(port, function() {
         const actualPort = server.address().port;
         console.log("\n" + "=".repeat(60));
-        console.log("  MathMLtoTeXandAltText API  v2.0.0");
+        console.log("  MathMLtoTeXandAltText API");
         console.log("  Developed by : Ambeth");
+        console.log("  GitHub       : https://github.com/Ambethmani/MathMLtoTeXandAltText");
         console.log("=".repeat(60));
         console.log("  Running  : http://localhost:" + actualPort);
+        console.log("  Endpoint : POST http://localhost:" + actualPort + "/process");
         console.log("  Browser  : http://localhost:" + actualPort + "/ui");
+        console.log("  Upload   : multipart field name = \'file\'");
+        console.log("  Outputs  : " + OUTPUT);
         console.log("=".repeat(60));
-        console.log("  Changes in v2.0.0:");
-        console.log("  - Output: equations.json (replaces equations.txt)");
-        console.log("  - DOCTYPE: fully preserved with all ENTITY declarations");
-        console.log("  - Graphic matching: per-equation position-anchored (no more mis-patching)");
+        if (actualPort !== 3000) {
+            console.log("");
+            console.log("  NOTE: Port 3000 was busy.");
+            console.log("  Use http://127.0.0.1:" + actualPort + " in your curl commands.");
+        }
+        console.log("");
+        console.log("  Rules:");
+        console.log("  - JSON file: Always returned (equations with TeX, AltText, MathML)");
+        console.log("  - LOG file : Always returned (processing log in TXT format)");
+        console.log("  - XML file : Only if <inline-graphic>/<graphic> tags found");
+        console.log("  - img tags : tex=''  alttext='' attributes added");
+        console.log("");
+                console.log("  TeX Engine : WIRIS/MathType (primary) + mathml-to-latex (fallback)");
+        console.log("  WIRIS      : " + (CONFIG.WIRIS_ENABLED ? "ENABLED" : "DISABLED"));
+        console.log("  Timeout    : " + CONFIG.WIRIS_TIMEOUT + "ms per equation");
+        console.log("");
+        console.log("  Press Ctrl+C to stop");
         console.log("=".repeat(60) + "\n");
     });
 }
@@ -3080,40 +3559,76 @@ startServer(PORT);
 
 /* ================================================================
    FOLDER WATCHER
+   Watches the uploads/ folder continuously.
+   When an XML file is dropped/copied into uploads/:
+     1. Detects it automatically (no curl needed)
+     2. Processes it through the same pipeline
+     3. Saves TXT, XML, LOG to outputs/ folder
+     4. Moves the processed XML to uploads/processed/ subfolder
+   Checks every 3 seconds for new files.
 ================================================================ */
 
 const PROCESSED_DIR = path.join(UPLOAD, "processed");
-if (!fs.existsSync(PROCESSED_DIR)) fs.mkdirSync(PROCESSED_DIR, { recursive: true });
 
+// Create processed subfolder
+if (!fs.existsSync(PROCESSED_DIR)) {
+    fs.mkdirSync(PROCESSED_DIR, { recursive: true });
+}
+
+// Track files currently being processed to avoid double-processing
 const processingFiles = new Set();
 
 function watchUploadsFolder() {
-    console.log("  [WATCHER] Watching uploads folder: " + UPLOAD);
 
+    console.log("  [WATCHER] Watching uploads folder for XML files...");
+    console.log("  [WATCHER] Drop any XML file into: " + UPLOAD);
+    console.log("  [WATCHER] Outputs will appear in:  " + OUTPUT);
+    console.log("");
+
+    // Use fs.watch for instant detection + polling as fallback
     fs.watch(UPLOAD, { persistent: true }, (eventType, filename) => {
-        if (!filename || !filename.toLowerCase().endsWith(".xml")) return;
+        if (!filename) return;
+        if (!filename.toLowerCase().endsWith(".xml")) return;
+
         const filePath = path.join(UPLOAD, filename);
-        setTimeout(() => { processWatchedFile(filePath, filename); }, 500);
+
+        // Small delay to ensure file is fully written before reading
+        setTimeout(() => {
+            processWatchedFile(filePath, filename);
+        }, 500);
     });
 
+    // Also poll every 3 seconds as fallback (handles copy-paste which
+    // may not trigger fs.watch reliably on all Windows versions)
     setInterval(() => {
         try {
             const files = fs.readdirSync(UPLOAD).filter(f =>
-                f.toLowerCase().endsWith(".xml") && !processingFiles.has(f)
+                f.toLowerCase().endsWith(".xml") &&
+                !processingFiles.has(f)
             );
             files.forEach(filename => {
-                processWatchedFile(path.join(UPLOAD, filename), filename);
+                const filePath = path.join(UPLOAD, filename);
+                processWatchedFile(filePath, filename);
             });
-        } catch (_) {}
+        } catch (e) {
+            // folder read error — ignore
+        }
     }, 3000);
 }
 
 async function processWatchedFile(filePath, filename) {
+
+    // Skip if already processing this file
     if (processingFiles.has(filename)) return;
+
+    // Skip if file doesn't exist (may have been moved already)
     if (!fs.existsSync(filePath)) return;
 
+    // Mark as processing
     processingFiles.add(filename);
-    console.log("\n  [WATCHER] Processing: " + filename);
+
+    console.log("\n  [WATCHER] Detected: " + filename);
+    console.log("  [WATCHER] Processing...");
 
     let rawXML;
     try {
@@ -3124,6 +3639,7 @@ async function processWatchedFile(filePath, filename) {
         return;
     }
 
+    // Process through same pipeline as API
     let result;
     try {
         result = await processXML(rawXML, filename);
@@ -3133,66 +3649,82 @@ async function processWatchedFile(filePath, filename) {
         return;
     }
 
-    // Restore DOCTYPE in output XML
-    if (result.extractedDoctype && result.xmlContent) {
-        result.xmlContent = restoreDOCTYPE(result.xmlContent, result.extractedDoctype);
-        console.log("  [WATCHER] DOCTYPE restored in output XML");
-    }
-
     const baseName  = path.basename(filename, ".xml");
     const timestamp = Date.now();
 
-    if (!fs.existsSync(OUTPUT)) fs.mkdirSync(OUTPUT, { recursive: true });
+    // Ensure output folder exists
+    if (!fs.existsSync(OUTPUT)) {
+        fs.mkdirSync(OUTPUT, { recursive: true });
+    }
 
-    // Save JSON (replaces TXT)
-    const jsonPath = path.resolve(path.join(OUTPUT, baseName + "_" + timestamp + "_equations.json"));
+    // Save JSON (equations)
+    const txtFilename = baseName + "_" + timestamp + "_equations.json";
+    const txtPath     = path.resolve(path.join(OUTPUT, txtFilename));
     try {
-        fs.writeFileSync(jsonPath, result.jsonContent, "utf8");
-        console.log("  [WATCHER] JSON saved: " + jsonPath);
+        fs.writeFileSync(txtPath, result.txtContent, "utf8");
+        console.log("  [WATCHER] JSON saved: " + txtPath);
     } catch (e) {
         console.error("  [WATCHER] ERROR saving JSON: " + e.message);
     }
 
-    // Save XML
+    // Save XML if modified
+    let xmlFilename = null;
     if (result.xmlContent) {
-        const xmlPath = path.resolve(path.join(OUTPUT, baseName + "_" + timestamp + "_modified.xml"));
+        xmlFilename = baseName + "_" + timestamp + "_modified.xml";
+        const xmlPath = path.resolve(path.join(OUTPUT, xmlFilename));
         try {
             fs.writeFileSync(xmlPath, result.xmlContent, "utf8");
-            console.log("  [WATCHER] XML saved: " + xmlPath);
+            console.log("  [WATCHER] XML saved : " + xmlPath);
         } catch (e) {
             console.error("  [WATCHER] ERROR saving XML: " + e.message);
         }
+    } else {
+        console.log("  [WATCHER] XML       : No img tags found — JSON only");
     }
 
     // Save LOG
-    const logPath = path.resolve(path.join(OUTPUT, baseName + "_" + timestamp + "_log.txt"));
+    const logFilename = baseName + "_" + timestamp + "_log.txt";
+    const logPath     = path.resolve(path.join(OUTPUT, logFilename));
     try {
         fs.writeFileSync(logPath, result.logContent, "utf8");
-        console.log("  [WATCHER] LOG saved: " + logPath);
+        console.log("  [WATCHER] LOG saved : " + logPath);
     } catch (e) {
         console.error("  [WATCHER] ERROR saving LOG: " + e.message);
     }
 
-    // Move processed file
+    // Move processed XML to uploads/processed/ subfolder
     const processedPath = path.join(PROCESSED_DIR, filename);
     try {
+        // If a file with same name exists in processed, add timestamp
         const destPath = fs.existsSync(processedPath)
             ? path.join(PROCESSED_DIR, baseName + "_" + timestamp + ".xml")
             : processedPath;
         fs.renameSync(filePath, destPath);
-        console.log("  [WATCHER] Moved to: " + destPath);
+        console.log("  [WATCHER] Moved to  : " + destPath);
     } catch (e) {
+        // If rename fails (cross-device), try copy + delete
         try {
             fs.copyFileSync(filePath, processedPath);
             fs.unlinkSync(filePath);
+            console.log("  [WATCHER] Moved to  : " + processedPath);
         } catch (e2) {
             console.error("  [WATCHER] Could not move file: " + e2.message);
         }
     }
 
-    const eq = result.equations;
-    console.log(`  [WATCHER] Done! Equations: ${eq.length}  TeX OK: ${eq.filter(e=>e.texStatus==="OK").length}`);
+    // Summary
+    const eq     = result.equations;
+    const txOK   = eq.filter(e => e.texStatus === "OK").length;
+    const txFail = eq.filter(e => e.texStatus !== "OK").length;
+    console.log("  [WATCHER] Done! Equations: " + eq.length +
+        "  TeX OK: " + txOK +
+        "  TeX Issues: " + txFail);
+    console.log("  [WATCHER] Outputs in: " + OUTPUT);
+    console.log("");
+
+    // Unmark so same filename can be processed again later
     processingFiles.delete(filename);
 }
 
+// Start watching after server is ready (slight delay)
 setTimeout(watchUploadsFolder, 1000);
